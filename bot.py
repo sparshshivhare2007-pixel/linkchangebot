@@ -4,10 +4,11 @@ import json
 from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
-from config_telethon import *
+from config import *
 
 # ========== BOT INIT ==========
-bot = TelegramClient('telethon_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+print("🚀 Starting Link Changer Bot (Telethon)...")
+bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 # ========== GLOBAL VARIABLES ==========
 usernames_list = []
@@ -25,7 +26,7 @@ SESSION_FILE = "session_data.json"
 def save_session_string(sess_str):
     with open(SESSION_FILE, "w") as f:
         json.dump({"session_string": sess_str}, f)
-    print(f"✅ Session string saved")
+    print("✅ Session string saved")
 
 def load_session_string():
     try:
@@ -91,8 +92,6 @@ async def change_username():
     global current_index, current_username
     
     print(f"🔹 Changing username...")
-    print(f"🔹 Usernames: {usernames_list}")
-    print(f"🔹 Session connected: {session_connected}")
     
     if not usernames_list:
         print("❌ No usernames!")
@@ -108,9 +107,11 @@ async def change_username():
         
         print(f"🔹 Changing to: @{clean_username}")
         
-        # Telethon mein channel username change
-        await owner_session(events.ChatAction)
-        await owner_session.edit_channel_username(CHANNEL_ID, clean_username)
+        # Get channel entity
+        channel = await owner_session.get_entity(CHANNEL_ID)
+        
+        # Change username
+        await owner_session.edit_channel_username(channel, clean_username)
         
         current_username = clean_username
         current_index = (current_index + 1) % len(usernames_list)
@@ -170,7 +171,7 @@ async def start_command(event):
     status = "✅ Connected" if session_connected else "❌ Not Connected"
     
     await event.reply(
-        f"🤖 **Link Changer Bot (Telethon)**\n\n"
+        f"🤖 **Link Changer Bot**\n\n"
         f"📌 Channel: `{CHANNEL_ID}`\n"
         f"📛 Usernames: {len(usernames_list)}\n"
         f"⏱ Delay: {format_delay(delay_seconds)}\n"
