@@ -2,7 +2,9 @@ import asyncio
 import json
 import os
 import re
-from typing import Optional
+import time
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
 from telethon import utils
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -26,6 +28,255 @@ import config
 
 
 # ============================================================
+# USER MANAGEMENT
+# ============================================================
+
+class UserManager:
+    def __init__(self):
+        self.users_file = "users.json"
+        self.pending_file = "pending_payments.json"
+        self.sudo_file = "sudo_users.json"
+        self.load_data()
+    
+    def load_data(self):
+        """Load all data from JSON files"""
+        # Load users
+        if not os.path.exists(self.users_file):
+            self.users = {}
+            self.save_users()
+        else:
+            try:
+                with open(self.users_file, "r", encoding="utf-8") as f:
+                    self.users = json.load(f)
+            except:
+                self.users = {}
+        
+        # Load pending payments
+        if not os.path.exists(self.pending_file):
+            self.pending = {}
+            self.save_pending()
+        else:
+            try:
+                with open(self.pending_file, "r", encoding="utf-8") as f:
+                    self.pending = json.load(f)
+            except:
+                self.pending = {}
+        
+        # Load sudo users
+        if not os.path.exists(self.sudo_file):
+            self.sudo_users = []
+            self.save_sudo()
+        else:
+            try:
+                with open(self.sudo_file, "r", encoding="utf-8") as f:
+                    self.sudo_users = json.load(f)
+            except:
+                self.sudo_users = []
+    
+    def save_users(self):
+        """Save user data to JSON file"""
+        with open(self.users_file, "w", encoding="utf-8") as f:
+            json.dump(self.users, f, indent=4)
+    
+    def save_pending(self):
+        """Save pending payments to JSON file"""
+        with open(self.pending_file, "w", encoding="utf-8") as f:
+            json.dump(self.pending, f, indent=4)
+    
+    def save_sudo(self):
+        """Save sudo users to JSON file"""
+        with open(self.sudo_file, "w", encoding="utf-8") as f:
+            json.dump(self.sudo_users, f, indent=4)
+    
+    def is_owner(self, user_id: int) -> bool:
+        """Check if user is the owner"""
+        return user_id == config.OWNER_ID
+    
+    def is_sudo(self, user_id: int) -> bool:
+        """Check if user is a sudo user"""
+        return str(user_id) in self.sudo_users
+    
+    def is_registered(self, user_id: int) -> bool:
+        """Check if user is registered"""
+        return str(user_id) in self.users
+    
+    def is_active(self, user_id: int) -> bool:
+        """Check if user's subscription is active"""
+        if not self.is_registered(user_id):
+            return False
+        
+        # Sudo users are always active
+        if self.is_sudo(user_id):
+            return True
+        
+        user_data = self.users[str(user_id)]
+        expiry = user_data.get("expiry", 0)
+        return time.time() < expiry
+    
+    def register_user(self, user_id: int, username: str = None, first_name: str = None):
+        """Register a new user"""
+        user_id_str = str(user_id)
+        if user_id_str not in self.users:
+            self.users[user_id_str] = {
+                "username": username,
+                "first_name": first_name,
+                "joined": time.time(),
+                "expiry": 0,
+                "plan": None,
+                "active": False,
+                "is_sudo": False
+            }
+            self.save_users()
+    
+    def activate_user(self, user_id: int, plan_days: int):
+        """Activate user subscription"""
+        user_id_str = str(user_id)
+        if user_id_str in self.users:
+            current_expiry = self.users[user_id_str].get("expiry", 0)
+            new_expiry = max(current_expiry, time.time()) + (plan_days * 24 * 3600)
+            self.users[user_id_str]["expiry"] = new_expiry
+            self.users[user_id_str]["plan"] = self.get_plan_name(plan_days)
+            self.users[user_id_str]["active"] = True
+            self.save_users()
+            return True
+        return False
+    
+    def add_sudo_user(self, user_id: int) -> bool:
+        """Add a user as sudo (unlimited access)"""
+        user_id_str = str(user_id)
+        if user_id_str not in self.sudo_users:
+            self.sudo_users.append(user_id_str)
+            self.save_sudo()
+            
+            # Update user data
+            if user_id_str in self.users:
+                self.users[user_id_str]["is_sudo"] = True
+                self.users[user_id_str]["plan"] = "Sudo Unlimited"
+                self.users[user_id_str]["active"] = True
+                self.users[user_id_str]["expiry"] = float('inf')
+                self.save_users()
+            return True
+        return False
+    
+    def remove_sudo_user(self, user_id: int) -> bool:
+        """Remove a user from sudo"""
+        user_id_str = str(user_id)
+        if user_id_str in self.sudo_users:
+            self.sudo_users.remove(user_id_str)
+            self.save_sudo()
+            
+            # Update user data
+            if user_id_str in self.users:
+                self.users[user_id_str]["is_sudo"] = False
+                self.users[user_id_str]["plan"] = None
+                self.save_users()
+            return True
+        return False
+    
+    def get_sudo_users(self) -> List[str]:
+        """Get list of sudo user IDs"""
+        return self.sudo_users
+    
+    def add_pending_payment(self, user_id: int, plan_days: int, username: str = None):
+        """Add a pending payment request"""
+        user_id_str = str(user_id)
+        payment_id = f"pay_{int(time.time())}_{user_id_str}"
+        
+        self.pending[payment_id] = {
+            "user_id": user_id_str,
+            "username": username,
+            "plan_days": plan_days,
+            "amount": self.get_plan_price(plan_days),
+            "plan_name": self.get_plan_name(plan_days),
+            "timestamp": time.time(),
+            "status": "pending"
+        }
+        self.save_pending()
+        return payment_id
+    
+    def get_pending_payments(self):
+        """Get all pending payments"""
+        return {k: v for k, v in self.pending.items() if v.get("status") == "pending"}
+    
+    def approve_payment(self, payment_id: str):
+        """Approve a payment and activate user"""
+        if payment_id in self.pending:
+            payment = self.pending[payment_id]
+            if payment.get("status") == "pending":
+                user_id = int(payment["user_id"])
+                plan_days = payment["plan_days"]
+                
+                # Activate user
+                self.activate_user(user_id, plan_days)
+                
+                # Mark payment as approved
+                self.pending[payment_id]["status"] = "approved"
+                self.pending[payment_id]["approved_at"] = time.time()
+                self.save_pending()
+                return True
+        return False
+    
+    def reject_payment(self, payment_id: str):
+        """Reject a payment"""
+        if payment_id in self.pending:
+            self.pending[payment_id]["status"] = "rejected"
+            self.save_pending()
+            return True
+        return False
+    
+    def get_plan_price(self, plan_days: int) -> float:
+        """Get price for a plan in INR"""
+        prices = {
+            7: 150.0,    # ₹150 for 7 days
+            14: 260.0,   # ₹260 for 14 days
+            30: 500.0,   # ₹500 for 30 days
+            -1: 900.0    # ₹900 for Unlimited
+        }
+        return prices.get(plan_days, 0)
+    
+    def get_plan_name(self, plan_days: int) -> str:
+        """Get plan name"""
+        if plan_days == -1:
+            return "Unlimited Plan"
+        return f"{plan_days} Days Plan"
+    
+    def get_remaining_time(self, user_id: int) -> int:
+        """Get remaining time in seconds"""
+        if self.is_sudo(user_id):
+            return -1  # Unlimited
+        
+        if not self.is_registered(user_id):
+            return 0
+        user_data = self.users[str(user_id)]
+        expiry = user_data.get("expiry", 0)
+        remaining = max(0, expiry - time.time())
+        return int(remaining)
+    
+    def format_remaining_time(self, user_id: int) -> str:
+        """Format remaining time in human readable format"""
+        if self.is_sudo(user_id):
+            return "♾️ Unlimited"
+        
+        remaining = self.get_remaining_time(user_id)
+        if remaining <= 0:
+            return "Expired"
+        
+        days = remaining // 86400
+        hours = (remaining % 86400) // 3600
+        minutes = (remaining % 3600) // 60
+        
+        parts = []
+        if days > 0:
+            parts.append(f"{days}d")
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+        
+        return " ".join(parts) if parts else "0m"
+
+
+# ============================================================
 # UI HELPERS
 # ============================================================
 
@@ -37,20 +288,6 @@ def format_header(title: str, emoji: str = "🤖") -> str:
 │ {emoji}  {title}  │
 └{border}┘
 """
-
-
-def format_section(title: str, content: str, emoji: str = "📌") -> str:
-    """Create a formatted section with title and content."""
-    return f"""
-┌─ {emoji} {title}
-│
-{content}
-└─"""
-
-
-def format_key_value(key: str, value: str, emoji: str = "•") -> str:
-    """Format a key-value pair with proper alignment."""
-    return f"  {emoji} {key}: {value}"
 
 
 def format_success(message: str) -> str:
@@ -80,28 +317,6 @@ def format_info(message: str) -> str:
 └─"""
 
 
-def format_status(status: str, is_good: bool = True) -> str:
-    """Format a status indicator."""
-    icon = "🟢" if is_good else "🔴"
-    return f"{icon} {status}"
-
-
-def format_list(items: list, title: str = "LIST") -> str:
-    """Format a list of items with numbering."""
-    if not items:
-        return "📭 Empty"
-    
-    lines = []
-    for i, item in enumerate(items, 1):
-        lines.append(f"  {i}. {item}")
-    
-    return f"""
-┌─ 📋 {title}
-│
-{chr(10).join(lines)}
-└─"""
-
-
 def format_delay(seconds: int) -> str:
     """Format delay in human-readable form."""
     hours = seconds // 3600
@@ -124,36 +339,106 @@ def format_delay(seconds: int) -> str:
 # ANIMATION HELPERS
 # ============================================================
 
-async def animate_initialization(update, context):
-    """Create an animated initialization sequence with character-by-character reveal."""
+async def animate_initialization(update, context, user_manager):
+    """Create an animated initialization sequence for non-owners."""
     
-    # The initialization text with the exact font you requested
     init_text = "𝒾𝓃𝒾𝓉𝒾𝒶𝓁𝒾𝓏𝒾𝓃𝑔"
     
-    # Create inline keyboard buttons
-    keyboard = [
-        [
-            InlineKeyboardButton("📊 Status", callback_data="status"),
-            InlineKeyboardButton("📝 List", callback_data="list"),
-        ],
-        [
-            InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
-            InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
-        ],
-        [
-            InlineKeyboardButton("📖 Help", callback_data="help"),
-            InlineKeyboardButton("ℹ️ About", callback_data="about"),
-        ],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Create the full welcome message template with image
+    # Create welcome message for public
     welcome_template = f"""
 ╔═══════════════════════════════════════════╗
 ║                                           ║
 ║    {init_text}    ║
 ║                                           ║
-║          ⚡ SYSTEM LOADING ⚡              ║
+║       🔐 RESTRICTED ACCESS               ║
+║                                           ║
+╚═══════════════════════════════════════════╝
+
+┌─ 🔒 ACCESS DENIED
+│
+  • This bot is for authorized users only.
+  • Please purchase a plan to use the bot.
+  • Contact owner for more information.
+
+┌─ 💳 BUY PLAN
+│
+  • 7 Days Plan - ₹150
+  • 14 Days Plan - ₹260  
+  • 30 Days Plan - ₹500
+  • Unlimited Plan - ₹900
+
+└─
+
+💡 Click the buttons below to get started!"""
+
+    # Create inline keyboard for public
+    keyboard = [
+        [
+            InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan"),
+            InlineKeyboardButton("📋 Plans", callback_data="plans"),
+        ],
+        [
+            InlineKeyboardButton("ℹ️ About", callback_data="about"),
+            InlineKeyboardButton("📞 Contact", callback_data="contact"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Split the template
+    parts = welcome_template.split(init_text)
+    
+    # Initial message
+    initial_message = parts[0] + " " * len(init_text) + parts[1]
+    message = await update.message.reply_text(
+        text=initial_message,
+        reply_markup=reply_markup
+    )
+    
+    # Animate initialization text
+    for i in range(1, len(init_text) + 1):
+        animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
+        await message.edit_text(
+            text=animated_text,
+            reply_markup=reply_markup
+        )
+        await asyncio.sleep(0.12)
+    
+    # Glow effect
+    for _ in range(3):
+        glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
+        await message.edit_text(
+            text=glow_text,
+            reply_markup=reply_markup
+        )
+        await asyncio.sleep(0.2)
+        
+        normal_text = parts[0] + init_text + parts[1]
+        await message.edit_text(
+            text=normal_text,
+            reply_markup=reply_markup
+        )
+        await asyncio.sleep(0.2)
+    
+    # Final message
+    final_message = welcome_template.replace(init_text, f"🔒 {init_text} 🔒")
+    await message.edit_text(
+        text=final_message,
+        reply_markup=reply_markup
+    )
+
+
+async def animate_owner_start(update, context, user_manager):
+    """Animated start for owner with full access."""
+    
+    init_text = "𝒾𝓃𝒾𝓉𝒾𝒶𝓁𝒾𝓏𝒾𝓃𝑔"
+    
+    # Create owner welcome message
+    welcome_template = f"""
+╔═══════════════════════════════════════════╗
+║                                           ║
+║    {init_text}    ║
+║                                           ║
+║       👑 OWNER ACCESS                    ║
 ║                                           ║
 ╚═══════════════════════════════════════════╝
 
@@ -188,132 +473,546 @@ async def animate_initialization(update, context):
 │    /list
 │    /clear
 │    /current
+│
+│  💳 PAYMENTS
+│    /pending - View pending payments
+│    /approve <id> - Approve payment
+│    /reject <id> - Reject payment
+│    /users - List all users
+│
+│  👑 SUDO MANAGEMENT
+│    /addsudo <user_id> - Add sudo user
+│    /rmsudo <user_id> - Remove sudo user
+│    /sudolist - List sudo users
 └─
 
 💡 Use buttons below for quick access!"""
 
-    # Split the welcome template into parts
+    # Create owner keyboard
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("📝 List", callback_data="list"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
+            InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
+        ],
+        [
+            InlineKeyboardButton("💳 Pending", callback_data="pending_payments"),
+            InlineKeyboardButton("👥 Users", callback_data="list_users"),
+        ],
+        [
+            InlineKeyboardButton("👑 Sudo Users", callback_data="list_sudo"),
+            InlineKeyboardButton("📖 Help", callback_data="help"),
+        ],
+        [
+            InlineKeyboardButton("ℹ️ About", callback_data="about"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Split the template
     parts = welcome_template.split(init_text)
     
-    # Send initial message with just the first part
+    # Initial message
     initial_message = parts[0] + " " * len(init_text) + parts[1]
-    
-    # Send with image and inline buttons
-    image_url = "https://telegra.ph/file/your-image-link-here.jpg"  # Replace with your image URL
-    message = await update.message.reply_photo(
-        photo=image_url,
-        caption=initial_message,
+    message = await update.message.reply_text(
+        text=initial_message,
         reply_markup=reply_markup
     )
     
-    # Animate the initialization text character by character
+    # Animate initialization text
     for i in range(1, len(init_text) + 1):
-        # Build the text with current progress
         animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
-        
-        # Add a loading indicator
-        loading_chars = ["|", "/", "-", "\\"]
-        loading = loading_chars[i % len(loading_chars)]
-        
-        # Update the message caption
-        await message.edit_caption(
-            caption=animated_text,
+        await message.edit_text(
+            text=animated_text,
             reply_markup=reply_markup
         )
-        
-        # Small delay for smooth animation
         await asyncio.sleep(0.12)
     
-    # Final animation with glow effect
+    # Glow effect
     for _ in range(3):
-        # Glow on
         glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
-        await message.edit_caption(
-            caption=glow_text,
+        await message.edit_text(
+            text=glow_text,
             reply_markup=reply_markup
         )
         await asyncio.sleep(0.2)
         
-        # Glow off
         normal_text = parts[0] + init_text + parts[1]
-        await message.edit_caption(
-            caption=normal_text,
+        await message.edit_text(
+            text=normal_text,
             reply_markup=reply_markup
         )
         await asyncio.sleep(0.2)
     
-    # Final message with complete initialization
+    # Final message
     final_message = welcome_template.replace(init_text, f"✅ {init_text} ✅")
-    await message.edit_caption(
-        caption=final_message,
+    await message.edit_text(
+        text=final_message,
         reply_markup=reply_markup
     )
 
 
-async def animate_loading(update, context, duration=3):
-    """Show a loading animation with progress dots."""
-    loading_steps = ["●○○○", "○●○○", "○○●○", "○○○●"]
-    message = await update.message.reply_text("⏳ Loading")
-    
-    for i in range(duration * 5):  # 5 updates per second
-        step = loading_steps[i % len(loading_steps)]
-        await message.edit_text(f"⏳ Loading {step}")
-        await asyncio.sleep(0.2)
-    
-    return message
-
-
-async def animate_text_sequence(update, context, text_sequence, delay=0.15):
-    """Animate a sequence of texts in a single message."""
-    message = await update.message.reply_text(text_sequence[0])
-    
-    for text in text_sequence[1:]:
-        await asyncio.sleep(delay)
-        await message.edit_text(text)
-    
-    return message
-
-
 # ============================================================
-# INLINE BUTTON HANDLERS
+# PAYMENT HANDLERS WITH LOGGER GROUP
 # ============================================================
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button callbacks."""
+async def show_plans(update, context):
+    """Show available plans with prices."""
+    keyboard = [
+        [
+            InlineKeyboardButton("📅 7 Days - ₹150", callback_data="plan_7"),
+            InlineKeyboardButton("📅 14 Days - ₹260", callback_data="plan_14"),
+        ],
+        [
+            InlineKeyboardButton("📅 30 Days - ₹500", callback_data="plan_30"),
+            InlineKeyboardButton("♾️ Unlimited - ₹900", callback_data="plan_-1"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="back"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"""{format_header("💳 Choose Your Plan", "💳")}
+
+┌─ 📋 PLANS
+│
+│  📅 7 Days Plan
+│    • Price: ₹150
+│    • Full bot access
+│    • Priority support
+│    • Unlimited username rotation
+│
+│  📅 14 Days Plan
+│    • Price: ₹260
+│    • Full bot access
+│    • Priority support
+│    • Unlimited username rotation
+│    • Early features access
+│
+│  📅 30 Days Plan
+│    • Price: ₹500
+│    • Full bot access
+│    • Priority support
+│    • Unlimited username rotation
+│    • Early features access
+│    • Best value!
+│
+│  ♾️ Unlimited Plan
+│    • Price: ₹900
+│    • Lifetime access
+│    • Premium support
+│    • All features included
+│    • Best for long-term users!
+│
+└─
+
+💳 Select a plan to proceed with payment.""",
+        reply_markup=reply_markup
+    )
+
+
+async def show_payment(update, context, plan_days):
+    """Show payment details with QR code."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    username = query.from_user.username or query.from_user.first_name
+    
+    # Add pending payment
+    user_manager = context.bot_data.get('user_manager')
+    payment_id = user_manager.add_pending_payment(user_id, plan_days, username)
+    
+    # Get plan price and name
+    amount = user_manager.get_plan_price(plan_days)
+    plan_name = user_manager.get_plan_name(plan_days)
+    
+    # QR Code path (from root directory)
+    qr_path = "qr.jpg"
+    qr_exists = os.path.exists(qr_path)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ I've Paid", callback_data=f"paid_{payment_id}"),
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{payment_id}"),
+        ],
+        [
+            InlineKeyboardButton("🔙 Back", callback_data="plans"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_text = f"""{format_header("💳 Payment Details", "💳")}
+
+┌─ 📝 PAYMENT INFO
+│
+  • Plan: {plan_name}
+  • Amount: ₹{amount:.0f}
+  • Payment ID: `{payment_id}`
+│
+├─ 📋 INSTRUCTIONS
+│  1. Scan the QR code below
+│  2. Send payment of ₹{amount:.0f}
+│  3. Click "I've Paid" button
+│  4. Wait for owner verification
+│
+└─
+
+⏳ Waiting for payment verification...
+Owner will approve your payment shortly."""
+    
+    if qr_exists:
+        with open(qr_path, "rb") as f:
+            await query.message.reply_photo(
+                photo=f,
+                caption=message_text,
+                reply_markup=reply_markup
+            )
+            await query.message.delete()
+    else:
+        await query.message.edit_text(
+            f"""{message_text}
+
+⚠️ QR code not found. Please contact owner for payment details.""",
+            reply_markup=reply_markup
+        )
+
+
+async def send_to_logger_group(context, text, photo_path=None):
+    """Send message to logger group."""
+    try:
+        if photo_path and os.path.exists(photo_path):
+            with open(photo_path, "rb") as f:
+                await context.bot.send_photo(
+                    chat_id=config.LOGGER_GROUP_ID,
+                    photo=f,
+                    caption=text
+                )
+        else:
+            await context.bot.send_message(
+                chat_id=config.LOGGER_GROUP_ID,
+                text=text
+            )
+    except Exception as e:
+        print(f"Failed to send to logger group: {e}")
+
+
+async def handle_payment_callback(update, context):
+    """Handle payment-related callbacks."""
     query = update.callback_query
     await query.answer()
     
-    if query.data == "status":
-        # Call status command
+    user_manager = context.bot_data.get('user_manager')
+    data = query.data
+    
+    if data == "buy_plan":
+        await show_plans(update, context)
+    
+    elif data == "plans":
+        await show_plans(update, context)
+    
+    elif data.startswith("plan_"):
+        plan_days = int(data.split("_")[1])
+        await show_payment(update, context, plan_days)
+    
+    elif data.startswith("paid_"):
+        payment_id = data.split("_")[1]
+        
+        # Check if payment exists
+        if payment_id in user_manager.pending:
+            payment = user_manager.pending[payment_id]
+            if payment.get("status") == "pending":
+                # Send notification to logger group with QR
+                qr_path = "qr.jpg"
+                
+                logger_text = f"""
+┌─ 💳 NEW PAYMENT REQUEST
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • User ID: {payment['user_id']}
+  • Plan: {payment['plan_name']}
+  • Amount: ₹{payment['amount']:.0f}
+  • Time: {datetime.fromtimestamp(payment['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}
+│
+├─ 📋 ACTIONS
+│  Use these commands in bot:
+│  /approve {payment_id} - ✅ Approve
+│  /reject {payment_id} - ❌ Reject
+│
+└─"""
+                
+                await send_to_logger_group(context, logger_text, qr_path)
+                
+                # Update user message
+                await query.message.edit_text(
+                    f"""{format_info("✅ Payment Submitted!")}
+
+┌─ 📤 NOTIFICATION SENT
+│
+  • Payment ID: `{payment_id}`
+  • Status: ⏳ Waiting for verification
+  • Owner has been notified in logger group
+│
+└─
+
+📢 You will be notified when owner approves your payment.
+⏱️ This usually takes a few minutes."""
+                )
+                
+                return
+    
+    elif data.startswith("refresh_"):
+        payment_id = data.split("_")[1]
+        if payment_id in user_manager.pending:
+            payment = user_manager.pending[payment_id]
+            status = payment.get("status", "pending")
+            
+            if status == "approved":
+                await query.message.edit_text(
+                    f"""{format_success("🎉 Payment Approved!")}
+
+┌─ ✅ ACCESS GRANTED
+│
+  • Your payment has been verified!
+  • You now have full access to the bot.
+  • Use /start to get started.
+│
+└─
+
+🎊 Welcome aboard!"""
+                )
+            elif status == "rejected":
+                await query.message.edit_text(
+                    f"""{format_error("❌ Payment Rejected")}
+
+┌─ ❌ PAYMENT FAILED
+│
+  • Your payment was rejected.
+  • Please contact owner for assistance.
+  • You can try again with a new payment.
+│
+└─
+
+💡 Contact @owner for help."""
+                )
+            else:
+                await query.message.edit_text(
+                    f"""{format_info("⏳ Still Waiting")}
+
+┌─ ⏳ PENDING
+│
+  • Payment ID: `{payment_id}`
+  • Status: Waiting for verification
+  • Owner has been notified
+│
+└─
+
+⏱️ Please wait for owner to verify your payment."""
+                )
+    
+    elif data == "pending_payments":
+        pending = user_manager.get_pending_payments()
+        if pending:
+            text = f"""{format_header("💳 Pending Payments", "💳")}
+
+┌─ 📋 LIST
+│"""
+            for pid, payment in pending.items():
+                text += f"""
+│  • ID: `{pid}`
+│    User: @{payment['username']}
+│    Plan: {payment['plan_name']}
+│    Amount: ₹{payment['amount']:.0f}
+│    Time: {datetime.fromtimestamp(payment['timestamp']).strftime('%Y-%m-%d %H:%M')}
+│"""
+            
+            text += """
+└─
+
+📌 Use /approve <id> or /reject <id> to manage payments."""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_pending")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.edit_text(
+                text,
+                reply_markup=reply_markup
+            )
+        else:
+            await query.message.edit_text(
+                f"""{format_info("No Pending Payments")}
+
+┌─ 📭 EMPTY
+│
+  • There are no pending payments.
+  • All payments have been processed.
+└─""",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                ])
+            )
+    
+    elif data == "list_users":
+        users = user_manager.users
+        if users:
+            text = f"""{format_header("👥 Registered Users", "👥")}
+
+┌─ 📋 LIST
+│"""
+            for uid, user in users.items():
+                remaining = user_manager.format_remaining_time(int(uid))
+                status = "🟢 Active" if user_manager.is_active(int(uid)) else "🔴 Expired"
+                is_sudo = "👑" if user_manager.is_sudo(int(uid)) else ""
+                text += f"""
+│  {is_sudo} ID: {uid}
+│    User: @{user.get('username', 'N/A')}
+│    Plan: {user.get('plan', 'None')}
+│    Status: {status}
+│    Remaining: {remaining}
+│"""
+            
+            text += """
+└─"""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_users")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.edit_text(
+                text,
+                reply_markup=reply_markup
+            )
+        else:
+            await query.message.edit_text(
+                f"""{format_info("No Users")}
+
+┌─ 📭 EMPTY
+│
+  • No users have registered yet.
+└─""",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                ])
+            )
+    
+    elif data == "list_sudo":
+        sudo_users = user_manager.get_sudo_users()
+        if sudo_users:
+            text = f"""{format_header("👑 Sudo Users", "👑")}
+
+┌─ 📋 LIST
+│"""
+            for uid in sudo_users:
+                user = user_manager.users.get(uid, {})
+                text += f"""
+│  • ID: {uid}
+│    User: @{user.get('username', 'N/A')}
+│    Plan: {user.get('plan', 'Sudo Unlimited')}
+│    Status: 🟢 Active (Unlimited)
+│"""
+            
+            text += """
+└─
+
+📌 Sudo users have unlimited lifetime access."""
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_sudo")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await query.message.edit_text(
+                text,
+                reply_markup=reply_markup
+            )
+        else:
+            await query.message.edit_text(
+                f"""{format_info("No Sudo Users")}
+
+┌─ 📭 EMPTY
+│
+  • There are no sudo users.
+  • Use /addsudo to add one.
+└─""",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                ])
+            )
+    
+    elif data == "refresh_pending":
+        await query.message.delete()
+        await pending_command(update, context)
+    
+    elif data == "refresh_users":
+        await query.message.delete()
+        await users_command(update, context)
+    
+    elif data == "refresh_sudo":
+        await query.message.delete()
+        await sudo_list_command(update, context)
+    
+    elif data == "back":
+        # Go back to appropriate menu
+        if user_manager.is_owner(query.from_user.id):
+            await animate_owner_start(update, context, user_manager)
+        else:
+            await animate_initialization(update, context, user_manager)
+    
+    elif data == "help":
+        if user_manager.is_owner(query.from_user.id):
+            await show_owner_help(update, context)
+        else:
+            await show_public_help(update, context)
+    
+    elif data == "about":
+        await show_about(update, context)
+    
+    elif data == "contact":
+        await show_contact(update, context)
+    
+    elif data == "status":
         await status_command(update, context)
     
-    elif query.data == "list":
-        # Call list command
+    elif data == "list":
         await list_command(update, context)
     
-    elif query.data == "start_rotation":
-        # Call forcestart command
+    elif data == "start_rotation":
         await forcestart_command(update, context)
     
-    elif query.data == "stop_rotation":
-        # Call forcestop command
+    elif data == "stop_rotation":
         await forcestop_command(update, context)
+
+
+async def show_owner_help(update, context):
+    """Show help for owner."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    elif query.data == "help":
-        # Show help menu
-        await query.edit_message_text(
-            f"""{format_header("📖 Help Menu", "📖")}
+    await update.callback_query.message.edit_text(
+        f"""{format_header("📖 Owner Help", "📖")}
 
 ┌─ 📚 COMMANDS
 │
-│  🔐 SESSION MANAGEMENT
+│  🔐 SESSION
 │    /connect <session> - Connect Telegram session
 │
-│  🎯 TARGET MANAGEMENT  
+│  🎯 TARGET
 │    /addchannel <link> - Set channel target
 │    /addgroup <link> - Set group target
 │
-│  📝 USERNAME MANAGEMENT
+│  📝 USERNAMES
 │    /addusername @name1, @name2 - Add usernames
 │    /done - Finalize username list
 │    /setdelay 20min - Set rotation delay
@@ -321,53 +1020,120 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 │    /clear - Clear username list
 │    /current - Show current username
 │
-│  ⚙️ ROTATION CONTROL
+│  ⚙️ ROTATION
 │    /forcestart - Start rotation
 │    /forcestop - Stop rotation
 │    /change_now - Change to next username
 │
-│  📊 INFORMATION
+│  💳 PAYMENTS
+│    /pending - View pending payments
+│    /approve <id> - Approve payment
+│    /reject <id> - Reject payment
+│    /users - List all users
+│
+│  👑 SUDO MANAGEMENT
+│    /addsudo <user_id> - Add sudo user
+│    /rmsudo <user_id> - Remove sudo user
+│    /sudolist - List sudo users
+│
+│  📊 INFO
 │    /status - Show bot status
 │
 └─
 
-💡 Tip: Use buttons for quick access!""",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back to Main", callback_data="back")]
-            ])
-        )
+💡 Use buttons for quick access!""",
+        reply_markup=reply_markup
+    )
+
+
+async def show_public_help(update, context):
+    """Show help for public users."""
+    keyboard = [
+        [InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    elif query.data == "about":
-        # Show about information
-        await query.edit_message_text(
-            f"""{format_header("ℹ️ About Bot", "ℹ️")}
+    await update.callback_query.message.edit_text(
+        f"""{format_header("📖 Help", "📖")}
+
+┌─ ℹ️ INFORMATION
+│
+  • This bot is for authorized users only.
+  • Purchase a plan to get access.
+  • Contact owner for support.
+│
+├─ 💳 PLANS
+│  • 7 Days - ₹150
+│  • 14 Days - ₹260
+│  • 30 Days - ₹500
+│  • Unlimited - ₹900
+│
+└─
+
+📌 Click "Buy Plan" to get started!""",
+        reply_markup=reply_markup
+    )
+
+
+async def show_about(update, context):
+    """Show about information."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.callback_query.message.edit_text(
+        f"""{format_header("ℹ️ About Bot", "ℹ️")}
 
 ┌─ 🤖 BOT INFO
 │
   • Name: Telegram Link Changer Bot
-  • Version: 2.0
+  • Version: 3.0
   • Language: Python
   • Library: python-telegram-bot
   • Framework: Telethon
 │
 ├─ ⚡ FEATURES
-│  • Automatic username rotation
-│  • Multiple username support
-│  • Customizable delay
-│  • Session management
-│  • Real-time status
+  • Automatic username rotation
+  • Multiple username support
+  • Customizable delay
+  • Session management
+  • Real-time status
+  • Payment system (₹)
+  • User management
+  • Sudo users
+  • Unlimited plans
+  • Logger group integration
 │
 └─
 
 Made with ❤️ using Python""",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back to Main", callback_data="back")]
-            ])
-        )
+        reply_markup=reply_markup
+    )
+
+
+async def show_contact(update, context):
+    """Show contact information."""
+    keyboard = [
+        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    elif query.data == "back":
-        # Go back to main menu
-        await start_command(update, context)
+    await update.callback_query.message.edit_text(
+        f"""{format_header("📞 Contact", "📞")}
+
+┌─ 📬 CONTACT INFO
+│
+  • For support: Contact @owner
+  • For issues: Contact @owner
+  • For payments: Contact @owner
+│
+└─
+
+📌 Owner will respond within 24 hours.""",
+        reply_markup=reply_markup
+    )
 
 
 # ============================================================
@@ -429,7 +1195,7 @@ entity_cache_loaded = False
 
 
 # ============================================================
-# OWNER CHECK
+# ACCESS CONTROL
 # ============================================================
 
 def is_owner(update):
@@ -438,16 +1204,674 @@ def is_owner(update):
     return update.effective_user.id == config.OWNER_ID
 
 
+async def check_access(update, context):
+    """Check if user has access to the bot."""
+    user_id = update.effective_user.id
+    user_manager = context.bot_data.get('user_manager')
+    
+    # Owner always has access
+    if user_manager.is_owner(user_id):
+        return True
+    
+    # Sudo users always have access
+    if user_manager.is_sudo(user_id):
+        return True
+    
+    # Check if user is registered and active
+    if user_manager.is_active(user_id):
+        return True
+    
+    return False
+
+
 async def owner_only(update):
+    """Check if user is the owner."""
     if not is_owner(update):
         if update.message:
-            await update.message.reply_text(format_error("You are not authorized to use this bot."))
+            await update.message.reply_text(format_error("❌ You are not authorized.\nThis command is for the bot owner only."))
+        return False
+    return True
+
+
+async def require_access(update, context):
+    """Decorator to check access before executing command."""
+    if not await check_access(update, context):
+        await update.message.reply_text(
+            f"""{format_error("Access Denied")}
+
+┌─ 🔒 RESTRICTED
+│
+  • You don't have an active subscription.
+  • Please purchase a plan to use the bot.
+│
+├─ 💳 PLANS
+│  • 7 Days - ₹150
+│  • 14 Days - ₹260
+│  • 30 Days - ₹500
+│  • Unlimited - ₹900
+│
+└─
+
+💡 Use /start to buy a plan."""
+        )
         return False
     return True
 
 
 # ============================================================
-# TELETHON SESSION
+# /START - WITH USER MANAGEMENT
+# ============================================================
+
+async def start_command(update, context):
+    """Handle /start command with user management."""
+    user = update.effective_user
+    user_id = user.id
+    user_manager = context.bot_data.get('user_manager')
+    
+    # Register user if not exists
+    user_manager.register_user(
+        user_id,
+        user.username,
+        user.first_name
+    )
+    
+    # Owner gets full access
+    if user_manager.is_owner(user_id):
+        await animate_owner_start(update, context, user_manager)
+        return
+    
+    # Sudo users get full access
+    if user_manager.is_sudo(user_id):
+        remaining = "♾️ Unlimited"
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Status", callback_data="status"),
+                InlineKeyboardButton("📝 List", callback_data="list"),
+            ],
+            [
+                InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
+                InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
+            ],
+            [
+                InlineKeyboardButton("📖 Help", callback_data="help"),
+                InlineKeyboardButton("ℹ️ About", callback_data="about"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"""{format_header("👑 Sudo User Access", "👑")}
+
+┌─ 👤 USER INFO
+│
+  • ID: {user_id}
+  • Name: {user.first_name or 'Unknown'}
+  • Status: 🟢 Active (Unlimited)
+  • Plan: Sudo Unlimited
+  • Remaining: ♾️ Unlimited
+│
+├─ 🚀 GET STARTED
+│
+  • You have unlimited lifetime access!
+  • Use the buttons below to control the bot
+  • Check /help for commands
+│
+└─
+
+💡 You have full access to all features!""",
+            reply_markup=reply_markup
+        )
+        return
+    
+    # Check if user has active subscription
+    if user_manager.is_active(user_id):
+        remaining = user_manager.format_remaining_time(user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Status", callback_data="status"),
+                InlineKeyboardButton("📝 List", callback_data="list"),
+            ],
+            [
+                InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
+                InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
+            ],
+            [
+                InlineKeyboardButton("📖 Help", callback_data="help"),
+                InlineKeyboardButton("ℹ️ About", callback_data="about"),
+            ],
+            [
+                InlineKeyboardButton("💳 Renew Plan", callback_data="buy_plan"),
+            ],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"""{format_header("✅ Welcome Back!", "👋")}
+
+┌─ 👤 USER INFO
+│
+  • ID: {user_id}
+  • Name: {user.first_name or 'Unknown'}
+  • Status: 🟢 Active
+  • Plan: {user_manager.users[str(user_id)].get('plan', 'N/A')}
+  • Remaining: {remaining}
+│
+├─ 🚀 GET STARTED
+│
+  • Use the buttons below to control the bot
+  • Check /help for commands
+  • Renew your plan before it expires
+│
+└─
+
+💡 You have full access to all features!""",
+            reply_markup=reply_markup
+        )
+        return
+    
+    # User is not active - show restricted access
+    await animate_initialization(update, context, user_manager)
+
+
+# ============================================================
+# SUDO COMMANDS
+# ============================================================
+
+async def add_sudo_command(update, context):
+    """Add a sudo user (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            f"""{format_error("Usage Error")}
+
+┌─ 📝 USAGE
+│
+  /addsudo <user_id>
+│
+├─ 📋 EXAMPLE
+│  /addsudo 123456789
+│
+└─
+
+💡 User will get unlimited lifetime access."""
+        )
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    user_id_str = context.args[0].strip()
+    
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
+        await update.message.reply_text(format_error("Invalid user ID. Please provide a numeric ID."))
+        return
+    
+    if user_manager.is_owner(user_id):
+        await update.message.reply_text(format_error("Cannot add owner as sudo."))
+        return
+    
+    if user_manager.is_sudo(user_id):
+        await update.message.reply_text(format_info(f"User {user_id} is already a sudo user."))
+        return
+    
+    # Add sudo user
+    user_manager.add_sudo_user(user_id)
+    
+    # Get user info if available
+    user_data = user_manager.users.get(str(user_id), {})
+    username = user_data.get('username', 'Unknown')
+    
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"""{format_success("🎉 You've been promoted to Sudo!")}
+
+┌─ 👑 SUDO ACCESS
+│
+  • You now have unlimited lifetime access!
+  • All features are available to you.
+  • You don't need to pay for any plan.
+│
+└─
+
+💡 Use /start to get started!"""
+        )
+    except:
+        pass
+    
+    # Send to logger group
+    await send_to_logger_group(
+        context,
+        f"""
+┌─ 👑 NEW SUDO USER ADDED
+│
+  • User ID: {user_id}
+  • Username: @{username}
+  • Added by: @{update.effective_user.username or 'Owner'}
+  • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+└─"""
+    )
+    
+    await update.message.reply_text(
+        f"""{format_success("Sudo User Added")}
+
+┌─ 👑 SUDO INFO
+│
+  • User ID: {user_id}
+  • Username: @{username}
+  • Status: 🟢 Active (Unlimited)
+  • Access: Lifetime
+│
+└─
+
+✅ User now has unlimited lifetime access!"""
+    )
+
+
+async def remove_sudo_command(update, context):
+    """Remove a sudo user (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            f"""{format_error("Usage Error")}
+
+┌─ 📝 USAGE
+│
+  /rmsudo <user_id>
+│
+├─ 📋 EXAMPLE
+│  /rmsudo 123456789
+│
+└─
+
+💡 This will remove unlimited access from the user."""
+        )
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    user_id_str = context.args[0].strip()
+    
+    try:
+        user_id = int(user_id_str)
+    except ValueError:
+        await update.message.reply_text(format_error("Invalid user ID. Please provide a numeric ID."))
+        return
+    
+    if user_manager.is_owner(user_id):
+        await update.message.reply_text(format_error("Cannot remove owner from sudo."))
+        return
+    
+    if not user_manager.is_sudo(user_id):
+        await update.message.reply_text(format_info(f"User {user_id} is not a sudo user."))
+        return
+    
+    # Remove sudo user
+    user_manager.remove_sudo_user(user_id)
+    
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"""{format_error("Sudo Access Removed")}
+
+┌─ 🔒 ACCESS REVOKED
+│
+  • Your unlimited lifetime access has been removed.
+  • You now need to purchase a plan.
+  • Contact owner for more information.
+│
+└─
+
+💡 Use /start to view available plans."""
+        )
+    except:
+        pass
+    
+    # Send to logger group
+    await send_to_logger_group(
+        context,
+        f"""
+┌─ 🔒 SUDO USER REMOVED
+│
+  • User ID: {user_id}
+  • Removed by: @{update.effective_user.username or 'Owner'}
+  • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+└─"""
+    )
+    
+    await update.message.reply_text(
+        f"""{format_success("Sudo User Removed")}
+
+┌─ 👑 SUDO INFO
+│
+  • User ID: {user_id}
+  • Status: 🔴 Removed
+  • Access: Revoked
+│
+└─
+
+✅ User no longer has unlimited access."""
+    )
+
+
+async def sudo_list_command(update, context):
+    """List all sudo users (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    sudo_users = user_manager.get_sudo_users()
+    
+    if not sudo_users:
+        await update.message.reply_text(
+            f"""{format_info("No Sudo Users")}
+
+┌─ 📭 EMPTY
+│
+  • There are no sudo users.
+  • Use /addsudo to add one.
+└─"""
+        )
+        return
+    
+    text = f"""{format_header("👑 Sudo Users", "👑")}
+
+┌─ 📋 LIST
+│"""
+    for uid in sudo_users:
+        user = user_manager.users.get(uid, {})
+        username = user.get('username', 'N/A')
+        text += f"""
+│  • ID: {uid}
+│    User: @{username}
+│    Plan: Sudo Unlimited
+│    Status: 🟢 Active
+│"""
+    
+    text += """
+└─
+
+📌 Sudo users have unlimited lifetime access."""
+    
+    await update.message.reply_text(text)
+
+
+# ============================================================
+# PAYMENT MANAGEMENT COMMANDS
+# ============================================================
+
+async def pending_command(update, context):
+    """View pending payments (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    pending = user_manager.get_pending_payments()
+    
+    if not pending:
+        await update.message.reply_text(
+            f"""{format_info("No Pending Payments")}
+
+┌─ 📭 EMPTY
+│
+  • There are no pending payments.
+  • All payments have been processed.
+└─"""
+        )
+        return
+    
+    text = f"""{format_header("💳 Pending Payments", "💳")}
+
+┌─ 📋 LIST
+│"""
+    for pid, payment in pending.items():
+        text += f"""
+│  • ID: `{pid}`
+│    User: @{payment['username']}
+│    Plan: {payment['plan_name']}
+│    Amount: ₹{payment['amount']:.0f}
+│    Time: {datetime.fromtimestamp(payment['timestamp']).strftime('%Y-%m-%d %H:%M')}
+│"""
+    
+    text += """
+└─
+
+📌 Use /approve <id> or /reject <id> to manage payments."""
+    
+    await update.message.reply_text(text)
+
+
+async def approve_command(update, context):
+    """Approve a payment (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            f"""{format_error("Usage Error")}
+
+┌─ 📝 USAGE
+│
+  /approve <payment_id>
+│
+├─ 📋 EXAMPLE
+│  /approve pay_1234567890_123
+│
+└─
+
+💡 Use /pending to see all payment IDs."""
+        )
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    payment_id = context.args[0].strip()
+    
+    if payment_id not in user_manager.pending:
+        await update.message.reply_text(format_error("Invalid payment ID."))
+        return
+    
+    payment = user_manager.pending[payment_id]
+    if payment.get("status") != "pending":
+        await update.message.reply_text(format_info(f"This payment is already {payment.get('status')}."))
+        return
+    
+    # Approve payment
+    user_manager.approve_payment(payment_id)
+    
+    # Get user info
+    user_id = int(payment["user_id"])
+    plan_name = payment["plan_name"]
+    
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"""{format_success("🎉 Payment Approved!")}
+
+┌─ ✅ ACCESS GRANTED
+│
+  • Your {plan_name} has been activated!
+  • You now have full access to the bot.
+  • Use /start to get started.
+│
+└─
+
+🎊 Thank you for your purchase!"""
+        )
+    except:
+        pass
+    
+    # Send to logger group
+    await send_to_logger_group(
+        context,
+        f"""
+┌─ ✅ PAYMENT APPROVED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • User ID: {user_id}
+  • Plan: {plan_name}
+  • Amount: ₹{payment['amount']:.0f}
+  • Approved by: @{update.effective_user.username or 'Owner'}
+  • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+└─"""
+    )
+    
+    await update.message.reply_text(
+        f"""{format_success("Payment Approved")}
+
+┌─ ✅ APPROVED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • Plan: {plan_name}
+  • Amount: ₹{payment['amount']:.0f}
+│
+└─
+
+✅ User has been activated successfully!"""
+    )
+
+
+async def reject_command(update, context):
+    """Reject a payment (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            f"""{format_error("Usage Error")}
+
+┌─ 📝 USAGE
+│
+  /reject <payment_id>
+│
+├─ 📋 EXAMPLE
+│  /reject pay_1234567890_123
+│
+└─
+
+💡 Use /pending to see all payment IDs."""
+        )
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    payment_id = context.args[0].strip()
+    
+    if payment_id not in user_manager.pending:
+        await update.message.reply_text(format_error("Invalid payment ID."))
+        return
+    
+    payment = user_manager.pending[payment_id]
+    if payment.get("status") != "pending":
+        await update.message.reply_text(format_info(f"This payment is already {payment.get('status')}."))
+        return
+    
+    # Reject payment
+    user_manager.reject_payment(payment_id)
+    
+    # Get user info
+    user_id = int(payment["user_id"])
+    
+    # Notify the user
+    try:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"""{format_error("Payment Rejected")}
+
+┌─ ❌ REJECTED
+│
+  • Your payment was rejected.
+  • Please contact owner for assistance.
+  • You can try again with a new payment.
+│
+└─
+
+💡 Contact @owner for help."""
+        )
+    except:
+        pass
+    
+    # Send to logger group
+    await send_to_logger_group(
+        context,
+        f"""
+┌─ ❌ PAYMENT REJECTED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • User ID: {user_id}
+  • Plan: {payment['plan_name']}
+  • Amount: ₹{payment['amount']:.0f}
+  • Rejected by: @{update.effective_user.username or 'Owner'}
+  • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+└─"""
+    )
+    
+    await update.message.reply_text(
+        f"""{format_success("Payment Rejected")}
+
+┌─ ❌ REJECTED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • Plan: {payment['plan_name']}
+  • Amount: ₹{payment['amount']:.0f}
+│
+└─
+
+✅ Payment has been rejected."""
+    )
+
+
+async def users_command(update, context):
+    """List all users (owner only)."""
+    if not await owner_only(update):
+        return
+    
+    user_manager = context.bot_data.get('user_manager')
+    users = user_manager.users
+    
+    if not users:
+        await update.message.reply_text(
+            f"""{format_info("No Users")}
+
+┌─ 📭 EMPTY
+│
+  • No users have registered yet.
+└─"""
+        )
+        return
+    
+    text = f"""{format_header("👥 All Users", "👥")}
+
+┌─ 📋 LIST
+│"""
+    for uid, user in users.items():
+        remaining = user_manager.format_remaining_time(int(uid))
+        status = "🟢 Active" if user_manager.is_active(int(uid)) else "🔴 Expired"
+        is_sudo = "👑 " if user_manager.is_sudo(int(uid)) else ""
+        text += f"""
+│  {is_sudo}ID: {uid}
+│    User: @{user.get('username', 'N/A')}
+│    Plan: {user.get('plan', 'None')}
+│    Status: {status}
+│    Remaining: {remaining}
+│"""
+    
+    text += """
+└─"""
+    
+    await update.message.reply_text(text)
+
+
+# ============================================================
+# TELETHON SESSION FUNCTIONS
 # ============================================================
 
 async def connect_saved_session():
@@ -522,227 +1946,19 @@ async def ensure_client():
 
 
 # ============================================================
-# DELAY PARSER
-# ============================================================
-
-def parse_delay(text):
-    text = text.lower().strip()
-
-    pattern = r"(\d+)\s*(hour|hours|hr|hrs|min|mins|minute|minutes|sec|secs|second|seconds)"
-    matches = re.findall(pattern, text)
-
-    if not matches:
-        raise ValueError(
-            "Invalid delay format.\n\n"
-            "• Examples:\n"
-            "  /setdelay 20min\n"
-            "  /setdelay 1hour\n"
-            "  /setdelay 30sec\n"
-            "  /setdelay 1hour 30min\n"
-            "  /setdelay 1h 30m 10s"
-        )
-
-    total = 0
-
-    for value, unit in matches:
-        value = int(value)
-
-        if unit in ["hour", "hours", "hr", "hrs"]:
-            total += value * 3600
-        elif unit in ["min", "mins", "minute", "minutes"]:
-            total += value * 60
-        elif unit in ["sec", "secs", "second", "seconds"]:
-            total += value
-
-    if total <= 0:
-        raise ValueError("Delay must be greater than zero.")
-
-    return total
-
-
-# ============================================================
-# USERNAME
-# ============================================================
-
-def normalize_username(username):
-    username = username.strip()
-    if username.startswith("@"):
-        username = username[1:]
-    return username
-
-
-# ============================================================
-# RESOLVE TELEGRAM TARGET
-# ============================================================
-
-async def resolve_target(link):
-    tg = await ensure_client()
-
-    if not tg:
-        raise RuntimeError("No Telegram session connected.")
-
-    link = link.strip()
-
-    try:
-        if "t.me/" in link:
-            username = link.split("t.me/", 1)[1]
-            username = username.split("?", 1)[0]
-            username = username.rstrip("/")
-            entity = await tg.get_entity(username)
-        else:
-            entity = await tg.get_entity(link)
-
-        return entity
-
-    except Exception as e:
-        raise RuntimeError(f"Could not resolve target: {e}")
-
-
-# ============================================================
-# SAVE TARGET
-# ============================================================
-
-async def set_target(link, target_type):
-    entity = await resolve_target(link)
-
-    target_id = utils.get_peer_id(entity)
-
-    target_data.update({
-        "target_id": target_id,
-        "target_type": target_type,
-        "target_link": link
-    })
-
-    save_json(config.TARGET_FILE, target_data)
-    
-    global entity_cache_loaded
-    entity_cache_loaded = False
-
-    return entity
-
-
-# ============================================================
-# CHANGE USERNAME
-# ============================================================
-
-async def change_username(username):
-    tg = await ensure_client()
-
-    if not tg:
-        return (False, "Telegram session not connected.")
-
-    target_id = target_data.get("target_id")
-
-    if not target_id:
-        return (False, "No target set.")
-
-    username = normalize_username(username)
-
-    try:
-        entity = await tg.get_entity(target_id)
-
-        if not getattr(entity, "broadcast", False):
-            return (
-                False,
-                "Target is not a broadcast channel.\n"
-                "Telegram does not allow username operations on ordinary groups."
-            )
-
-        await tg(UpdateUsernameRequest(entity, username))
-
-        return (True, username)
-
-    except FloodWaitError as e:
-        return (False, f"FloodWait: wait {e.seconds} seconds.")
-
-    except UsernameOccupiedError:
-        return (False, f"@{username} is already occupied.")
-
-    except UsernameInvalidError:
-        return (False, f"@{username} is invalid.")
-
-    except RPCError as e:
-        return (False, f"Telegram error: {e}")
-
-    except Exception as e:
-        return (False, str(e))
-
-
-# ============================================================
-# ROTATION
-# ============================================================
-
-async def rotation_loop():
-    global current_index
-
-    print("🔄 Rotation started.")
-
-    while True:
-        if not usernames:
-            print("No usernames available.")
-            break
-
-        if not target_data.get("target_id"):
-            print("No target configured.")
-            break
-
-        await load_entity_cache()
-
-        username = usernames[current_index]
-
-        success, result = await change_username(username)
-
-        if success:
-            print(f"✅ Username changed: @{result}")
-            current_index = (current_index + 1) % len(usernames)
-            await asyncio.sleep(delay_seconds)
-        else:
-            print(f"❌ Username change failed: {result}")
-
-            if "FloodWait" in result:
-                match = re.search(r"(\d+)\s+seconds", result)
-                if match:
-                    wait = int(match.group(1))
-                    await asyncio.sleep(wait)
-                    continue
-
-            await asyncio.sleep(max(delay_seconds, 60))
-
-    print("⏹️ Rotation stopped.")
-
-
-# ============================================================
-# COMMAND HANDLERS - WITH ENHANCED UI
-# ============================================================
-
-# ============================================================
-# /START - WITH ANIMATION, IMAGE, AND INLINE BUTTONS
-# ============================================================
-
-async def start_command(update, context):
-    if not await owner_only(update):
-        return
-
-    # Show the animated initialization with image and buttons
-    await animate_initialization(update, context)
-
-
-# ============================================================
-# /CONNECT
+# CORE COMMAND HANDLERS
 # ============================================================
 
 async def connect_command(update, context):
-    global client, entity_cache_loaded
-
+    """Handle /connect command - Owner only."""
     if not await owner_only(update):
         return
+    
+    global client, entity_cache_loaded
 
     if not context.args:
         await update.message.reply_text(format_error("Usage:\n/connect <session_string>"))
         return
-
-    # Show loading animation while connecting
-    loading_msg = await animate_loading(update, context, duration=2)
 
     session_string = context.args[0].strip()
 
@@ -757,7 +1973,7 @@ async def connect_command(update, context):
 
         if not await test_client.is_user_authorized():
             await test_client.disconnect()
-            await loading_msg.edit_text(format_error("Invalid session string."))
+            await update.message.reply_text(format_error("Invalid session string."))
             return
 
         me = await test_client.get_me()
@@ -776,7 +1992,7 @@ async def connect_command(update, context):
         
         await load_entity_cache()
 
-        await loading_msg.edit_text(
+        await update.message.reply_text(
             f"""{format_success("Session Connected")}
 
 ┌─ 👤 ACCOUNT INFO
@@ -788,15 +2004,49 @@ async def connect_command(update, context):
         )
 
     except Exception as e:
-        await loading_msg.edit_text(format_error(f"Connection failed:\n{e}"))
+        await update.message.reply_text(format_error(f"Connection failed:\n{e}"))
 
 
-# ============================================================
-# /ADDCHANNEL
-# ============================================================
+async def set_target(link, target_type):
+    """Set the target for username rotation."""
+    tg = await ensure_client()
+    
+    if not tg:
+        raise RuntimeError("No Telegram session connected.")
+    
+    link = link.strip()
+    
+    try:
+        if "t.me/" in link:
+            username = link.split("t.me/", 1)[1]
+            username = username.split("?", 1)[0]
+            username = username.rstrip("/")
+            entity = await tg.get_entity(username)
+        else:
+            entity = await tg.get_entity(link)
+        
+        target_id = utils.get_peer_id(entity)
+        
+        target_data.update({
+            "target_id": target_id,
+            "target_type": target_type,
+            "target_link": link
+        })
+        
+        save_json(config.TARGET_FILE, target_data)
+        
+        global entity_cache_loaded
+        entity_cache_loaded = False
+        
+        return entity
+        
+    except Exception as e:
+        raise RuntimeError(f"Could not resolve target: {e}")
+
 
 async def addchannel_command(update, context):
-    if not await owner_only(update):
+    """Handle /addchannel command."""
+    if not await require_access(update, context):
         return
 
     if not context.args:
@@ -804,14 +2054,11 @@ async def addchannel_command(update, context):
         return
 
     link = context.args[0]
-    
-    # Show loading animation
-    loading_msg = await animate_loading(update, context, duration=1)
 
     try:
         entity = await set_target(link, "channel")
 
-        await loading_msg.edit_text(
+        await update.message.reply_text(
             f"""{format_success("Channel Added")}
 
 ┌─ 📺 CHANNEL INFO
@@ -825,15 +2072,12 @@ async def addchannel_command(update, context):
         )
 
     except Exception as e:
-        await loading_msg.edit_text(format_error(f"Failed to add channel:\n{e}"))
+        await update.message.reply_text(format_error(f"Failed to add channel:\n{e}"))
 
-
-# ============================================================
-# /ADDGROUP
-# ============================================================
 
 async def addgroup_command(update, context):
-    if not await owner_only(update):
+    """Handle /addgroup command."""
+    if not await require_access(update, context):
         return
 
     if not context.args:
@@ -841,14 +2085,11 @@ async def addgroup_command(update, context):
         return
 
     link = context.args[0]
-    
-    # Show loading animation
-    loading_msg = await animate_loading(update, context, duration=1)
 
     try:
         entity = await set_target(link, "group")
 
-        await loading_msg.edit_text(
+        await update.message.reply_text(
             f"""{format_success("Group Added")}
 
 ┌─ 👥 GROUP INFO
@@ -863,18 +2104,15 @@ async def addgroup_command(update, context):
         )
 
     except Exception as e:
-        await loading_msg.edit_text(format_error(f"Failed to add group:\n{e}"))
+        await update.message.reply_text(format_error(f"Failed to add group:\n{e}"))
 
-
-# ============================================================
-# /ADDUSERNAME
-# ============================================================
 
 async def addusername_command(update, context):
-    global usernames
-
-    if not await owner_only(update):
+    """Handle /addusername command."""
+    if not await require_access(update, context):
         return
+
+    global usernames
 
     if not context.args:
         await update.message.reply_text(format_error("Usage:\n/addusername @name1, @name2"))
@@ -908,15 +2146,12 @@ async def addusername_command(update, context):
     )
 
 
-# ============================================================
-# /DONE
-# ============================================================
-
 async def done_command(update, context):
-    global usernames
-
-    if not await owner_only(update):
+    """Handle /done command."""
+    if not await require_access(update, context):
         return
+
+    global usernames
 
     usernames = load_usernames()
 
@@ -933,15 +2168,56 @@ async def done_command(update, context):
     )
 
 
-# ============================================================
-# /SETDELAY
-# ============================================================
+def parse_delay(text):
+    """Parse delay from text input."""
+    text = text.lower().strip()
+    
+    pattern = r"(\d+)\s*(hour|hours|hr|hrs|min|mins|minute|minutes|sec|secs|second|seconds)"
+    matches = re.findall(pattern, text)
+    
+    if not matches:
+        raise ValueError(
+            "Invalid delay format.\n\n"
+            "• Examples:\n"
+            "  /setdelay 20min\n"
+            "  /setdelay 1hour\n"
+            "  /setdelay 30sec\n"
+            "  /setdelay 1hour 30min\n"
+            "  /setdelay 1h 30m 10s"
+        )
+    
+    total = 0
+    
+    for value, unit in matches:
+        value = int(value)
+        
+        if unit in ["hour", "hours", "hr", "hrs"]:
+            total += value * 3600
+        elif unit in ["min", "mins", "minute", "minutes"]:
+            total += value * 60
+        elif unit in ["sec", "secs", "second", "seconds"]:
+            total += value
+    
+    if total <= 0:
+        raise ValueError("Delay must be greater than zero.")
+    
+    return total
+
+
+def normalize_username(username):
+    """Normalize username by removing @ symbol."""
+    username = username.strip()
+    if username.startswith("@"):
+        username = username[1:]
+    return username
+
 
 async def setdelay_command(update, context):
-    global delay_seconds
-
-    if not await owner_only(update):
+    """Handle /setdelay command."""
+    if not await require_access(update, context):
         return
+
+    global delay_seconds
 
     if not context.args:
         await update.message.reply_text(format_error(
@@ -971,44 +2247,125 @@ async def setdelay_command(update, context):
         await update.message.reply_text(format_error(str(e)))
 
 
-# ============================================================
-# /FORCESTART
-# ============================================================
+async def change_username(username):
+    """Change username of target."""
+    tg = await ensure_client()
+    
+    if not tg:
+        return (False, "Telegram session not connected.")
+    
+    target_id = target_data.get("target_id")
+    
+    if not target_id:
+        return (False, "No target set.")
+    
+    username = normalize_username(username)
+    
+    try:
+        entity = await tg.get_entity(target_id)
+        
+        if not getattr(entity, "broadcast", False):
+            return (
+                False,
+                "Target is not a broadcast channel.\n"
+                "Telegram does not allow username operations on ordinary groups."
+            )
+        
+        await tg(UpdateUsernameRequest(entity, username))
+        
+        return (True, username)
+        
+    except FloodWaitError as e:
+        return (False, f"FloodWait: wait {e.seconds} seconds.")
+    
+    except UsernameOccupiedError:
+        return (False, f"@{username} is already occupied.")
+    
+    except UsernameInvalidError:
+        return (False, f"@{username} is invalid.")
+    
+    except RPCError as e:
+        return (False, f"Telegram error: {e}")
+    
+    except Exception as e:
+        return (False, str(e))
+
+
+async def rotation_loop():
+    """Main rotation loop."""
+    global current_index
+    
+    print("🔄 Rotation started.")
+    
+    while True:
+        if not usernames:
+            print("No usernames available.")
+            break
+        
+        if not target_data.get("target_id"):
+            print("No target configured.")
+            break
+        
+        await load_entity_cache()
+        
+        username = usernames[current_index]
+        
+        success, result = await change_username(username)
+        
+        if success:
+            print(f"✅ Username changed: @{result}")
+            current_index = (current_index + 1) % len(usernames)
+            await asyncio.sleep(delay_seconds)
+        else:
+            print(f"❌ Username change failed: {result}")
+            
+            if "FloodWait" in result:
+                match = re.search(r"(\d+)\s+seconds", result)
+                if match:
+                    wait = int(match.group(1))
+                    await asyncio.sleep(wait)
+                    continue
+            
+            await asyncio.sleep(max(delay_seconds, 60))
+    
+    print("⏹️ Rotation stopped.")
+
 
 async def forcestart_command(update, context):
-    global rotation_task
-
-    if not await owner_only(update):
+    """Handle /forcestart command."""
+    if not await require_access(update, context):
         return
-
+    
+    global rotation_task
+    
     if not target_data.get("target_id"):
         await update.message.reply_text(
             format_error("No target set!\nUse /addgroup or /addchannel")
         )
         return
-
+    
     if not usernames:
         await update.message.reply_text(
             format_error("No usernames added.\nUse /addusername")
         )
         return
-
+    
     tg = await ensure_client()
-
+    
     if not tg:
         await update.message.reply_text(
             format_error("Telegram session not connected.\nUse /connect")
         )
         return
-
+    
     if rotation_task and not rotation_task.done():
         await update.message.reply_text(
             format_info("Rotation is already running.")
         )
         return
-
+    
     rotation_task = asyncio.create_task(rotation_loop())
-
+    
     await update.message.reply_text(
         f"""{format_header("🚀 Rotation Started", "🚀")}
 
@@ -1025,25 +2382,22 @@ async def forcestart_command(update, context):
     )
 
 
-# ============================================================
-# /FORCESTOP
-# ============================================================
-
 async def forcestop_command(update, context):
-    global rotation_task
-
-    if not await owner_only(update):
+    """Handle /forcestop command."""
+    if not await require_access(update, context):
         return
-
+    
+    global rotation_task
+    
     if rotation_task and not rotation_task.done():
         rotation_task.cancel()
         try:
             await rotation_task
         except asyncio.CancelledError:
             pass
-
+        
         rotation_task = None
-
+        
         await update.message.reply_text(
             f"""{format_header("⏹️ Rotation Stopped", "⏹️")}
 
@@ -1057,32 +2411,29 @@ async def forcestop_command(update, context):
         await update.message.reply_text(format_info("Rotation is not running."))
 
 
-# ============================================================
-# /CHANGE_NOW
-# ============================================================
-
 async def change_now_command(update, context):
-    global current_index
-
-    if not await owner_only(update):
+    """Handle /change_now command."""
+    if not await require_access(update, context):
         return
-
+    
+    global current_index
+    
     if not target_data.get("target_id"):
         await update.message.reply_text(
             format_error("No target set!\nUse /addgroup or /addchannel")
         )
         return
-
+    
     if not usernames:
         await update.message.reply_text(
             format_error("Username list is empty.\nUse /addusername")
         )
         return
-
+    
     await load_entity_cache()
-
+    
     username = usernames[current_index]
-
+    
     status_msg = await update.message.reply_text(
         f"""┌─ 🔄 CHANGING USERNAME
 │
@@ -1091,9 +2442,9 @@ async def change_now_command(update, context):
 └─
 ⏳ Please wait..."""
     )
-
+    
     success, result = await change_username(username)
-
+    
     if success:
         current_index = (current_index + 1) % len(usernames)
         await status_msg.edit_text(
@@ -1117,25 +2468,22 @@ async def change_now_command(update, context):
         )
 
 
-# ============================================================
-# /STATUS
-# ============================================================
-
 async def status_command(update, context):
-    if not await owner_only(update):
+    """Handle /status command."""
+    if not await require_access(update, context):
         return
-
+    
     tg = await ensure_client()
-
+    
     session_connected = tg is not None
-    session_status = format_status("Connected", session_connected) if session_connected else format_status("Not Connected", False)
-
+    session_status = "🟢 Connected" if session_connected else "🔴 Not Connected"
+    
     target_set = target_data.get("target_id") is not None
-    target_status = format_status("Set", target_set) if target_set else format_status("Not Set", False)
-
+    target_status = "🟢 Set" if target_set else "🔴 Not Set"
+    
     running = rotation_task is not None and not rotation_task.done()
-    rotation_status = format_status("Running", running) if running else format_status("Stopped", False)
-
+    rotation_status = "🟢 Running" if running else "🔴 Stopped"
+    
     await update.message.reply_text(
         f"""{format_header("📊 System Status", "📊")}
 
@@ -1162,14 +2510,11 @@ async def status_command(update, context):
     )
 
 
-# ============================================================
-# /LIST
-# ============================================================
-
 async def list_command(update, context):
-    if not await owner_only(update):
+    """Handle /list command."""
+    if not await require_access(update, context):
         return
-
+    
     if not usernames:
         await update.message.reply_text(
             f"""{format_info("Username List")}
@@ -1181,7 +2526,7 @@ async def list_command(update, context):
 └─"""
         )
         return
-
+    
     # Split into chunks to avoid message length limits
     chunk_size = 30
     chunks = [usernames[i:i + chunk_size] for i in range(0, len(usernames), chunk_size)]
@@ -1198,20 +2543,17 @@ async def list_command(update, context):
         await update.message.reply_text(text)
 
 
-# ============================================================
-# /CLEAR
-# ============================================================
-
 async def clear_command(update, context):
-    global usernames, current_index
-
-    if not await owner_only(update):
+    """Handle /clear command."""
+    if not await require_access(update, context):
         return
-
+    
+    global usernames, current_index
+    
     usernames = []
     current_index = 0
     save_usernames(usernames)
-
+    
     await update.message.reply_text(
         f"""{format_success("List Cleared")}
 
@@ -1223,19 +2565,16 @@ async def clear_command(update, context):
     )
 
 
-# ============================================================
-# /CURRENT
-# ============================================================
-
 async def current_command(update, context):
-    if not await owner_only(update):
+    """Handle /current command."""
+    if not await require_access(update, context):
         return
-
+    
     current_username = "Unknown"
     current_title = "N/A"
-
+    
     tg = await ensure_client()
-
+    
     if tg and target_data.get("target_id"):
         try:
             entity = await tg.get_entity(target_data["target_id"])
@@ -1247,7 +2586,7 @@ async def current_command(update, context):
                 current_title = title
         except Exception:
             pass
-
+    
     await update.message.reply_text(
         f"""{format_header("🎯 Current Target", "🎯")}
 
@@ -1267,6 +2606,7 @@ async def current_command(update, context):
 # ============================================================
 
 async def error_handler(update, context):
+    """Handle errors globally."""
     print("Bot error:", context.error)
     if update and update.effective_message:
         await update.effective_message.reply_text(
@@ -1282,12 +2622,30 @@ def main():
     print("""
 ╔═══════════════════════════════════════╗
 ║     Telegram Link Changer Bot         ║
-║          Version 2.0                  ║
+║          Version 3.0                  ║
+║     With Payment & Sudo System        ║
 ╚═══════════════════════════════════════╝
     """)
-
+    
+    # Check for required files
+    if not os.path.exists("qr.jpg"):
+        print("⚠️ Warning: qr.jpg not found in root directory!")
+        print("   Please add qr.jpg for payment QR code.")
+    
+    if not os.path.exists("config.py"):
+        print("❌ Error: config.py not found!")
+        print("   Please create config.py with required variables.")
+        return
+    
+    # Initialize user manager
+    user_manager = UserManager()
+    
+    # Create application
     application = Application.builder().token(config.BOT_TOKEN).build()
-
+    
+    # Store user manager in bot data
+    application.bot_data['user_manager'] = user_manager
+    
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("connect", connect_command))
@@ -1304,12 +2662,29 @@ def main():
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("current", current_command))
     
+    # Payment management commands
+    application.add_handler(CommandHandler("pending", pending_command))
+    application.add_handler(CommandHandler("approve", approve_command))
+    application.add_handler(CommandHandler("reject", reject_command))
+    application.add_handler(CommandHandler("users", users_command))
+    
+    # Sudo management commands
+    application.add_handler(CommandHandler("addsudo", add_sudo_command))
+    application.add_handler(CommandHandler("rmsudo", remove_sudo_command))
+    application.add_handler(CommandHandler("sudolist", sudo_list_command))
+    
     # Callback query handler for inline buttons
-    application.add_handler(CallbackQueryHandler(button_callback))
-
+    application.add_handler(CallbackQueryHandler(handle_payment_callback))
+    
+    # Error handler
     application.add_error_handler(error_handler)
-
+    
     print("🤖 Bot is running... Press Ctrl+C to stop.")
+    print(f"📊 Logger Group ID: {config.LOGGER_GROUP_ID}")
+    print(f"👑 Owner ID: {config.OWNER_ID}")
+    print(f"💳 QR Code: {'✅ Found' if os.path.exists('qr.jpg') else '❌ Not Found'}")
+    print("=" * 50)
+    
     application.run_polling()
 
 
