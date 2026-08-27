@@ -383,30 +383,22 @@ async def resolve_target(link):
 # SAVE TARGET
 # ============================================================
 
-async def set_target(
-    link,
-    target_type
-):
+async def set_target(link, target_type):
 
     entity = await resolve_target(link)
 
-    target_id = entity.id
+    # Save proper Telegram peer ID (-100...)
+    target_id = utils.get_peer_id(entity)
 
-    target_data.update(
-        {
-            "target_id": target_id,
-            "target_type": target_type,
-            "target_link": link
-        }
-    )
+    target_data.update({
+        "target_id": target_id,
+        "target_type": target_type,
+        "target_link": link
+    })
 
-    save_json(
-        config.TARGET_FILE,
-        target_data
-    )
+    save_json(config.TARGET_FILE, target_data)
 
     return entity
-
 
 # ============================================================
 # CHANGE USERNAME
