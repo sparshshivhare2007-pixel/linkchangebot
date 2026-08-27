@@ -59,7 +59,10 @@ Place your payment QR code as qr.jpg in the root directory.
 5. Run the Bot
 bash
 python bot.py
-📝 Commands
+```
+
+### 📝 Commands
+```
 User Commands
 /start - Show bot menu
 
@@ -105,8 +108,9 @@ Sudo Commands
 /rmsudo <user_id> - Remove sudo user
 
 /sudolist - List sudo users
-
-📁 Files
+```
+### 📁 Files
+```
 text
 telegram-link-changer/
 ├── bot.py              # Main bot
@@ -122,7 +126,9 @@ telegram-link-changer/
     ├── session_data.json
     ├── target.json
     └── usernames.txt
-🛠️ Technologies
+    ```
+## 🛠️Technologies
+
 Python 3.8+
 
 python-telegram-bot
@@ -138,10 +144,6 @@ For support, contact the bot owner.
 
 📄 License
 MIT License
-
-text
-
----
 ```
 
 ## 📁 .env.example
