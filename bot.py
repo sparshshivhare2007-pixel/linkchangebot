@@ -290,7 +290,7 @@ def format_delay(seconds: int) -> str:
 
 
 # ============================================================
-# SAFE MESSAGE FUNCTIONS WITH FLOOD CONTROL
+# SAFE MESSAGE FUNCTIONS
 # ============================================================
 
 async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
@@ -308,9 +308,10 @@ async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
             await asyncio.sleep(wait_time + 1)
         except Exception as e:
             error_str = str(e)
-            # Ignore "Message is not modified" error
             if "Message is not modified" in error_str:
                 return True
+            if "There is no text in the message to edit" in error_str:
+                return False
             print(f"Edit error: {e}")
             if attempt == max_retries - 1:
                 return False
@@ -338,27 +339,27 @@ async def safe_reply_text(update, text, reply_markup=None, max_retries=3):
     return None
 
 
-async def safe_send_photo(update, photo_path, caption, reply_markup=None, max_retries=3):
-    """Safely send photo with retry on flood error"""
+async def safe_send_message(context, chat_id, text, reply_markup=None, max_retries=3):
+    """Safely send message with retry on flood error"""
     for attempt in range(max_retries):
         try:
             if reply_markup:
-                return await update.message.reply_photo(
-                    photo=open(photo_path, "rb"),
-                    caption=caption,
+                return await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
                     reply_markup=reply_markup
                 )
             else:
-                return await update.message.reply_photo(
-                    photo=open(photo_path, "rb"),
-                    caption=caption
+                return await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=text
                 )
         except RetryAfter as e:
             wait_time = e.retry_after
             print(f"Flood control: waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time + 1)
         except Exception as e:
-            print(f"Send photo error: {e}")
+            print(f"Send message error: {e}")
             if attempt == max_retries - 1:
                 return None
             await asyncio.sleep(1)
@@ -415,12 +416,10 @@ async def animate_initialization(update, context, user_manager):
     parts = welcome_template.split(init_text)
     initial_message = parts[0] + " " * len(init_text) + parts[1]
     
-    # Send initial message safely
     message = await safe_reply_text(update, initial_message, reply_markup)
     if not message:
         return
     
-    # Animate character by character with flood control
     for i in range(1, len(init_text) + 1):
         animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
         success = await safe_edit_message(message, animated_text, reply_markup)
@@ -428,12 +427,10 @@ async def animate_initialization(update, context, user_manager):
             break
         await asyncio.sleep(0.15)
     
-    # Glow effect
     for _ in range(3):
         glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
         await safe_edit_message(message, glow_text, reply_markup)
         await asyncio.sleep(0.2)
-        
         normal_text = parts[0] + init_text + parts[1]
         await safe_edit_message(message, normal_text, reply_markup)
         await asyncio.sleep(0.2)
@@ -552,7 +549,7 @@ async def animate_owner_start(update, context, user_manager):
 
 
 # ============================================================
-# PAYMENT HANDLERS
+# PAYMENT HANDLERS WITH LOGGER GROUP INTEGRATION
 # ============================================================
 
 async def show_plans(update, context):
@@ -618,12 +615,11 @@ async def show_plans(update, context):
     except Exception as e:
         error_str = str(e)
         if "Message is not modified" in error_str:
-            # If message is same, send as new message
+            await query.message.reply_text(text=text, reply_markup=reply_markup)
+        elif "There is no text in the message to edit" in error_str:
             await query.message.reply_text(text=text, reply_markup=reply_markup)
         else:
             print(f"Error showing plans: {e}")
-            # Try sending as new message as fallback
-            await query.message.reply_text(text=text, reply_markup=reply_markup)
 
 
 async def show_payment(update, context, plan_days):
@@ -677,13 +673,11 @@ Owner will approve your payment shortly."""
     
     try:
         if qr_exists:
-            # Try to delete current message first
             try:
                 await query.message.delete()
             except:
                 pass
             
-            # Send new message with photo
             with open(qr_path, "rb") as f:
                 await query.message.reply_photo(
                     photo=f,
@@ -691,7 +685,6 @@ Owner will approve your payment shortly."""
                     reply_markup=reply_markup
                 )
         else:
-            # QR not found, send text message
             try:
                 await query.message.edit_text(
                     text=f"""{message_text}
@@ -700,7 +693,7 @@ Owner will approve your payment shortly."""
                     reply_markup=reply_markup
                 )
             except Exception as e:
-                if "Message is not modified" in str(e):
+                if "There is no text in the message to edit" in str(e):
                     await query.message.reply_text(
                         text=f"""{message_text}
 
@@ -711,20 +704,10 @@ Owner will approve your payment shortly."""
                     raise
     except Exception as e:
         print(f"Error showing payment: {e}")
-        # Fallback: send text message
-        try:
-            await query.message.reply_text(
-                text=f"""{message_text}
-
-⚠️ Error displaying QR. Please contact owner for payment details.""",
-                reply_markup=reply_markup
-            )
-        except:
-            pass
 
 
 async def send_to_logger_group(context, text, photo_path=None):
-    """Send message to logger group."""
+    """Send message to logger group with QR code"""
     try:
         if photo_path and os.path.exists(photo_path):
             with open(photo_path, "rb") as f:
@@ -738,15 +721,15 @@ async def send_to_logger_group(context, text, photo_path=None):
                 chat_id=config.LOGGER_GROUP_ID,
                 text=text
             )
+        print(f"✅ Sent to logger group: {config.LOGGER_GROUP_ID}")
     except Exception as e:
-        print(f"Failed to send to logger group: {e}")
+        print(f"❌ Failed to send to logger group: {e}")
 
 
 async def handle_payment_callback(update, context):
     """Handle payment-related callbacks."""
     query = update.callback_query
     
-    # Always answer callback to clear loading state
     try:
         await query.answer()
     except Exception as e:
@@ -755,7 +738,6 @@ async def handle_payment_callback(update, context):
     user_manager = context.bot_data.get('user_manager')
     data = query.data
     
-    # Log callback for debugging
     print(f"Callback received: {data}")
     
     if data == "buy_plan":
@@ -774,7 +756,9 @@ async def handle_payment_callback(update, context):
         
         if payment_id in user_manager.pending:
             payment = user_manager.pending[payment_id]
+            
             if payment.get("status") == "pending":
+                # Send to logger group with QR code
                 qr_path = "qr.jpg"
                 
                 logger_text = f"""
@@ -789,17 +773,24 @@ async def handle_payment_callback(update, context):
 │
 ├─ 📋 ACTIONS
 │  Use these commands in bot:
-│  /approve {payment_id} - ✅ Approve
-│  /reject {payment_id} - ❌ Reject
+│  /approve {payment_id} - ✅ Approve Payment
+│  /reject {payment_id} - ❌ Reject Payment
 │
 └─"""
                 
+                # Send to logger group
                 await send_to_logger_group(context, logger_text, qr_path)
                 
                 # Send confirmation to user
                 try:
-                    # Try to edit existing message
-                    await query.message.edit_text(
+                    # Try to delete old message
+                    try:
+                        await query.message.delete()
+                    except:
+                        pass
+                    
+                    # Send new confirmation message
+                    await query.message.reply_text(
                         text=f"""{format_info("✅ Payment Submitted!")}
 
 ┌─ 📤 NOTIFICATION SENT
@@ -814,10 +805,11 @@ async def handle_payment_callback(update, context):
 ⏱️ This usually takes a few minutes."""
                     )
                 except Exception as e:
-                    print(f"Error editing confirmation: {e}")
-                    # Try sending new message
+                    print(f"Error sending confirmation: {e}")
+                    
+                    # Try to edit instead
                     try:
-                        await query.message.reply_text(
+                        await query.message.edit_text(
                             text=f"""{format_info("✅ Payment Submitted!")}
 
 ┌─ 📤 NOTIFICATION SENT
@@ -831,8 +823,8 @@ async def handle_payment_callback(update, context):
 📢 You will be notified when owner approves your payment.
 ⏱️ This usually takes a few minutes."""
                         )
-                    except:
-                        pass
+                    except Exception as e2:
+                        print(f"Edit also failed: {e2}")
                 
                 return
     
@@ -1764,10 +1756,12 @@ async def approve_command(update, context):
         await safe_reply_text(update, format_info(f"This payment is already {payment.get('status')}."))
         return
     
+    # Approve payment
     user_manager.approve_payment(payment_id)
     user_id = int(payment["user_id"])
     plan_name = payment["plan_name"]
     
+    # Notify user
     try:
         await context.bot.send_message(
             chat_id=user_id,
@@ -1783,13 +1777,14 @@ async def approve_command(update, context):
 
 🎊 Thank you for your purchase!"""
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Failed to notify user: {e}")
     
+    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
-┌─ ✅ PAYMENT APPROVED
+┌─ ✅ PAYMENT APPROVED ✅
 │
   • Payment ID: `{payment_id}`
   • User: @{payment['username']}
@@ -1798,12 +1793,14 @@ async def approve_command(update, context):
   • Amount: ₹{payment['amount']:.0f}
   • Approved by: @{update.effective_user.username or 'Owner'}
   • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-└─"""
+└─
+
+✅ Transaction successful! User has been activated."""
     )
     
     await safe_reply_text(
         update,
-        f"""{format_success("Payment Approved")}
+        f"""{format_success("✅ Payment Approved Successfully!")}
 
 ┌─ ✅ APPROVED
 │
@@ -1814,7 +1811,8 @@ async def approve_command(update, context):
 │
 └─
 
-✅ User has been activated successfully!"""
+✅ User has been activated successfully!
+📢 Notification sent to user and logger group."""
     )
 
 
@@ -1852,13 +1850,15 @@ async def reject_command(update, context):
         await safe_reply_text(update, format_info(f"This payment is already {payment.get('status')}."))
         return
     
+    # Reject payment
     user_manager.reject_payment(payment_id)
     user_id = int(payment["user_id"])
     
+    # Notify user
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"""{format_error("Payment Rejected")}
+            text=f"""{format_error("❌ Payment Rejected")}
 
 ┌─ ❌ REJECTED
 │
@@ -1870,13 +1870,14 @@ async def reject_command(update, context):
 
 💡 Contact @owner for help."""
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Failed to notify user: {e}")
     
+    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
-┌─ ❌ PAYMENT REJECTED
+┌─ ❌ PAYMENT REJECTED ❌
 │
   • Payment ID: `{payment_id}`
   • User: @{payment['username']}
@@ -1885,12 +1886,14 @@ async def reject_command(update, context):
   • Amount: ₹{payment['amount']:.0f}
   • Rejected by: @{update.effective_user.username or 'Owner'}
   • Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-└─"""
+└─
+
+❌ Payment has been rejected."""
     )
     
     await safe_reply_text(
         update,
-        f"""{format_success("Payment Rejected")}
+        f"""{format_success("✅ Payment Rejected")}
 
 ┌─ ❌ REJECTED
 │
@@ -1901,7 +1904,8 @@ async def reject_command(update, context):
 │
 └─
 
-✅ Payment has been rejected."""
+✅ Payment has been rejected.
+📢 Notification sent to user and logger group."""
     )
 
 
@@ -2533,13 +2537,13 @@ async def error_handler(update, context):
     error = context.error
     error_str = str(error)
     
-    # Ignore harmless errors
     harmless_errors = [
         "Message is not modified",
         "Query is too old",
         "Query_id_invalid",
         "Message to edit not found",
-        "Message can't be edited"
+        "Message can't be edited",
+        "There is no text in the message to edit"
     ]
     
     for harmless in harmless_errors:
@@ -2549,14 +2553,12 @@ async def error_handler(update, context):
     
     print(f"❌ Bot error: {error}")
     
-    # Check if error is RetryAfter (flood control)
     if isinstance(error, RetryAfter):
         wait_time = error.retry_after
         print(f"⏳ Flood control: Need to wait {wait_time} seconds")
         context.bot_data['flood_wait'] = wait_time
         return
     
-    # Try to notify user if possible
     try:
         if update and update.effective_message:
             await safe_reply_text(
