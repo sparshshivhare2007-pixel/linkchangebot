@@ -274,6 +274,14 @@ def format_info(message: str) -> str:
 └─"""
 
 
+def format_waiting(message: str) -> str:
+    return f"""
+┌─ ⏳ WAITING
+│
+{message}
+└─"""
+
+
 def format_delay(seconds: int) -> str:
     hours = seconds // 3600
     seconds %= 3600
@@ -548,8 +556,106 @@ async def animate_owner_start(update, context, user_manager):
     await safe_edit_message(message, final_message, reply_markup)
 
 
+async def animate_user_start(update, context, user_manager, user_id):
+    """Animated start for active users."""
+    
+    init_text = "𝒾𝓃𝒾𝓉𝒾𝒶𝓁𝒾𝓏𝒾𝓃𝑔"
+    
+    remaining = user_manager.format_remaining_time(user_id)
+    plan = user_manager.users[str(user_id)].get('plan', 'N/A')
+    
+    welcome_template = f"""
+╔═══════════════════════════════════════════╗
+║                                           ║
+║    {init_text}    ║
+║                                           ║
+║       ✅ ACCESS GRANTED                   ║
+║                                           ║
+╚═══════════════════════════════════════════╝
+
+┌─ 👤 USER INFO
+│
+  • ID: {user_id}
+  • Plan: {plan}
+  • Remaining: {remaining}
+  • Status: 🟢 Active
+│
+├─ 🚀 COMMANDS
+│
+│  🔐 SESSION
+│    /connect <session>
+│
+│  🎯 TARGET
+│    /addchannel <link>
+│    /addgroup <link>
+│
+│  📝 USERNAMES
+│    /addusername @name1, @name2
+│    /done
+│    /setdelay 20min
+│
+│  ⚙️ CONTROL
+│    /forcestart
+│    /forcestop
+│    /change_now
+│
+│  📊 INFO
+│    /status
+│    /list
+│    /clear
+│    /current
+│
+└─
+
+💡 You have full access! Use buttons below."""
+
+    keyboard = [
+        [
+            InlineKeyboardButton("📊 Status", callback_data="status"),
+            InlineKeyboardButton("📝 List", callback_data="list"),
+        ],
+        [
+            InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
+            InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
+        ],
+        [
+            InlineKeyboardButton("📖 Help", callback_data="help"),
+            InlineKeyboardButton("ℹ️ About", callback_data="about"),
+        ],
+        [
+            InlineKeyboardButton("💳 Renew Plan", callback_data="buy_plan"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    parts = welcome_template.split(init_text)
+    initial_message = parts[0] + " " * len(init_text) + parts[1]
+    
+    message = await safe_reply_text(update, initial_message, reply_markup)
+    if not message:
+        return
+    
+    for i in range(1, len(init_text) + 1):
+        animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
+        success = await safe_edit_message(message, animated_text, reply_markup)
+        if not success:
+            break
+        await asyncio.sleep(0.15)
+    
+    for _ in range(3):
+        glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
+        await safe_edit_message(message, glow_text, reply_markup)
+        await asyncio.sleep(0.2)
+        normal_text = parts[0] + init_text + parts[1]
+        await safe_edit_message(message, normal_text, reply_markup)
+        await asyncio.sleep(0.2)
+    
+    final_message = welcome_template.replace(init_text, f"✅ {init_text} ✅")
+    await safe_edit_message(message, final_message, reply_markup)
+
+
 # ============================================================
-# PAYMENT HANDLERS WITH LOGGER GROUP INTEGRATION
+# PAYMENT HANDLERS
 # ============================================================
 
 async def show_plans(update, context):
@@ -569,7 +675,7 @@ async def show_plans(update, context):
             InlineKeyboardButton("♾️ Unlimited - ₹900", callback_data="plan_-1"),
         ],
         [
-            InlineKeyboardButton("🔙 Back", callback_data="back"),
+            InlineKeyboardButton("🔙 Back", callback_data="back_to_menu"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -647,7 +753,7 @@ async def show_payment(update, context, plan_days):
             InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{payment_id}"),
         ],
         [
-            InlineKeyboardButton("🔙 Back", callback_data="plans"),
+            InlineKeyboardButton("🔙 Back to Plans", callback_data="plans"),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -664,7 +770,7 @@ async def show_payment(update, context, plan_days):
 │  1. Scan the QR code below
 │  2. Send payment of ₹{amount:.0f}
 │  3. Click "I've Paid" button
-│  4. Wait for owner verification
+│  4. Wait for owner verification (1 hour max)
 │
 └─
 
@@ -726,6 +832,33 @@ async def send_to_logger_group(context, text, photo_path=None):
         print(f"❌ Failed to send to logger group: {e}")
 
 
+async def go_back_to_menu(update, context):
+    """Go back to main menu based on user type."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    user_manager = context.bot_data.get('user_manager')
+    
+    try:
+        if user_manager.is_owner(user_id):
+            await animate_owner_start(update, context, user_manager)
+        elif user_manager.is_active(user_id):
+            await animate_user_start(update, context, user_manager, user_id)
+        else:
+            await animate_initialization(update, context, user_manager)
+    except Exception as e:
+        print(f"Error going back: {e}")
+        # Fallback: send simple message
+        try:
+            if user_manager.is_owner(user_id):
+                await query.message.reply_text("👑 Welcome back, Owner!")
+            elif user_manager.is_active(user_id):
+                await query.message.reply_text("✅ Welcome back! Use /start for menu.")
+            else:
+                await query.message.reply_text("🔒 Please purchase a plan to use the bot.")
+        except:
+            pass
+
+
 async def handle_payment_callback(update, context):
     """Handle payment-related callbacks."""
     query = update.callback_query
@@ -737,20 +870,33 @@ async def handle_payment_callback(update, context):
     
     user_manager = context.bot_data.get('user_manager')
     data = query.data
+    user_id = query.from_user.id
     
     print(f"Callback received: {data}")
     
+    # Back to main menu
+    if data == "back_to_menu" or data == "back":
+        await go_back_to_menu(update, context)
+        return
+    
+    # Buy plan
     if data == "buy_plan":
         await show_plans(update, context)
+        return
     
-    elif data == "plans":
+    # Show plans
+    if data == "plans":
         await show_plans(update, context)
+        return
     
-    elif data.startswith("plan_"):
+    # Select plan
+    if data.startswith("plan_"):
         plan_days = int(data.split("_")[1])
         await show_payment(update, context, plan_days)
+        return
     
-    elif data.startswith("paid_"):
+    # I've Paid button
+    if data.startswith("paid_"):
         payment_id = data.split("_")[1]
         print(f"Payment clicked: {payment_id}")
         
@@ -758,6 +904,34 @@ async def handle_payment_callback(update, context):
             payment = user_manager.pending[payment_id]
             
             if payment.get("status") == "pending":
+                # Send waiting message to user
+                try:
+                    try:
+                        await query.message.delete()
+                    except:
+                        pass
+                    
+                    await query.message.reply_text(
+                        text=f"""{format_waiting("⏳ Payment Submitted!")}
+
+┌─ 📤 WAITING FOR APPROVAL
+│
+  • Payment ID: `{payment_id}`
+  • Status: ⏳ Waiting for owner approval
+│
+├─ 📋 WHAT HAPPENS NEXT
+│  1. ✅ Owner has been notified
+│  2. 👀 Owner will verify your payment
+│  3. 🔔 You will be notified when approved
+│
+└─
+
+⏱️ Please wait for owner to approve your payment.
+📢 This usually takes a few minutes to 1 hour."""
+                    )
+                except Exception as e:
+                    print(f"Error sending waiting message: {e}")
+                
                 # Send to logger group with QR code
                 qr_path = "qr.jpg"
                 
@@ -776,59 +950,17 @@ async def handle_payment_callback(update, context):
 │  /approve {payment_id} - ✅ Approve Payment
 │  /reject {payment_id} - ❌ Reject Payment
 │
-└─"""
+└─
+
+⏳ Waiting for owner approval..."""
                 
                 # Send to logger group
                 await send_to_logger_group(context, logger_text, qr_path)
                 
-                # Send confirmation to user
-                try:
-                    # Try to delete old message
-                    try:
-                        await query.message.delete()
-                    except:
-                        pass
-                    
-                    # Send new confirmation message
-                    await query.message.reply_text(
-                        text=f"""{format_info("✅ Payment Submitted!")}
-
-┌─ 📤 NOTIFICATION SENT
-│
-  • Payment ID: `{payment_id}`
-  • Status: ⏳ Waiting for verification
-  • Owner has been notified in logger group
-│
-└─
-
-📢 You will be notified when owner approves your payment.
-⏱️ This usually takes a few minutes."""
-                    )
-                except Exception as e:
-                    print(f"Error sending confirmation: {e}")
-                    
-                    # Try to edit instead
-                    try:
-                        await query.message.edit_text(
-                            text=f"""{format_info("✅ Payment Submitted!")}
-
-┌─ 📤 NOTIFICATION SENT
-│
-  • Payment ID: `{payment_id}`
-  • Status: ⏳ Waiting for verification
-  • Owner has been notified in logger group
-│
-└─
-
-📢 You will be notified when owner approves your payment.
-⏱️ This usually takes a few minutes."""
-                        )
-                    except Exception as e2:
-                        print(f"Edit also failed: {e2}")
-                
                 return
     
-    elif data.startswith("refresh_"):
+    # Refresh payment status
+    if data.startswith("refresh_"):
         payment_id = data.split("_")[1]
         if payment_id in user_manager.pending:
             payment = user_manager.pending[payment_id]
@@ -865,7 +997,7 @@ async def handle_payment_callback(update, context):
                     )
                 else:
                     await query.message.edit_text(
-                        text=f"""{format_info("⏳ Still Waiting")}
+                        text=f"""{format_waiting("⏳ Still Waiting")}
 
 ┌─ ⏳ PENDING
 │
@@ -879,8 +1011,16 @@ async def handle_payment_callback(update, context):
                     )
             except Exception as e:
                 print(f"Error refreshing status: {e}")
+        return
     
-    elif data == "pending_payments":
+    # Pending payments list (owner only)
+    if data == "pending_payments":
+        if not user_manager.is_owner(user_id):
+            await query.message.edit_text(
+                text=format_error("❌ You are not authorized to view pending payments.")
+            )
+            return
+        
         pending = user_manager.get_pending_payments()
         if pending:
             text = f"""{format_header("💳 Pending Payments", "💳")}
@@ -903,7 +1043,7 @@ async def handle_payment_callback(update, context):
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_pending")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -922,13 +1062,21 @@ async def handle_payment_callback(update, context):
   • All payments have been processed.
 └─""",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
                     ])
                 )
             except Exception as e:
                 print(f"Error showing empty pending: {e}")
+        return
     
-    elif data == "list_users":
+    # List users (owner only)
+    if data == "list_users":
+        if not user_manager.is_owner(user_id):
+            await query.message.edit_text(
+                text=format_error("❌ You are not authorized to view users.")
+            )
+            return
+        
         users = user_manager.users
         if users:
             text = f"""{format_header("👥 Registered Users", "👥")}
@@ -952,7 +1100,7 @@ async def handle_payment_callback(update, context):
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_users")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -970,13 +1118,21 @@ async def handle_payment_callback(update, context):
   • No users have registered yet.
 └─""",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
                     ])
                 )
             except Exception as e:
                 print(f"Error showing empty users: {e}")
+        return
     
-    elif data == "list_sudo":
+    # List sudo users (owner only)
+    if data == "list_sudo":
+        if not user_manager.is_owner(user_id):
+            await query.message.edit_text(
+                text=format_error("❌ You are not authorized to view sudo users.")
+            )
+            return
+        
         sudo_users = user_manager.get_sudo_users()
         if sudo_users:
             text = f"""{format_header("👑 Sudo Users", "👑")}
@@ -999,7 +1155,7 @@ async def handle_payment_callback(update, context):
             
             keyboard = [
                 [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_sudo")],
-                [InlineKeyboardButton("🔙 Back", callback_data="back")],
+                [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -1018,65 +1174,75 @@ async def handle_payment_callback(update, context):
   • Use /addsudo to add one.
 └─""",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")]
                     ])
                 )
             except Exception as e:
                 print(f"Error showing empty sudo: {e}")
+        return
     
-    elif data == "refresh_pending":
+    # Refresh handlers
+    if data == "refresh_pending":
         try:
             await query.message.delete()
         except:
             pass
         await pending_command(update, context)
+        return
     
-    elif data == "refresh_users":
+    if data == "refresh_users":
         try:
             await query.message.delete()
         except:
             pass
         await users_command(update, context)
+        return
     
-    elif data == "refresh_sudo":
+    if data == "refresh_sudo":
         try:
             await query.message.delete()
         except:
             pass
         await sudo_list_command(update, context)
+        return
     
-    elif data == "back":
-        try:
-            if user_manager.is_owner(query.from_user.id):
-                await animate_owner_start(update, context, user_manager)
-            else:
-                await animate_initialization(update, context, user_manager)
-        except Exception as e:
-            print(f"Error going back: {e}")
-    
-    elif data == "help":
-        if user_manager.is_owner(query.from_user.id):
+    # Help
+    if data == "help":
+        if user_manager.is_owner(user_id):
             await show_owner_help(update, context)
         else:
             await show_public_help(update, context)
+        return
     
-    elif data == "about":
+    # About
+    if data == "about":
         await show_about(update, context)
+        return
     
-    elif data == "contact":
+    # Contact
+    if data == "contact":
         await show_contact(update, context)
+        return
     
-    elif data == "status":
+    # Status
+    if data == "status":
         await status_command(update, context)
+        return
     
-    elif data == "list":
+    # List
+    if data == "list":
         await list_command(update, context)
+        return
     
-    elif data == "start_rotation":
+    # Start rotation
+    if data == "start_rotation":
         await forcestart_command(update, context)
+        return
     
-    elif data == "stop_rotation":
+    # Stop rotation
+    if data == "stop_rotation":
         await forcestop_command(update, context)
+        return
 
 
 async def show_owner_help(update, context):
@@ -1086,7 +1252,7 @@ async def show_owner_help(update, context):
         return
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1146,7 +1312,7 @@ async def show_public_help(update, context):
     
     keyboard = [
         [InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1181,7 +1347,7 @@ async def show_about(update, context):
         return
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1224,7 +1390,7 @@ async def show_contact(update, context):
         return
     
     keyboard = [
-        [InlineKeyboardButton("🔙 Back", callback_data="back")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1360,10 +1526,12 @@ async def start_command(update, context):
     
     user_manager.register_user(user_id, user.username, user.first_name)
     
+    # Owner gets full access
     if user_manager.is_owner(user_id):
         await animate_owner_start(update, context, user_manager)
         return
     
+    # Sudo users get full access
     if user_manager.is_sudo(user_id):
         keyboard = [
             [
@@ -1377,6 +1545,9 @@ async def start_command(update, context):
             [
                 InlineKeyboardButton("📖 Help", callback_data="help"),
                 InlineKeyboardButton("ℹ️ About", callback_data="about"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back", callback_data="back_to_menu"),
             ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1406,52 +1577,12 @@ async def start_command(update, context):
         )
         return
     
+    # Active users get access
     if user_manager.is_active(user_id):
-        remaining = user_manager.format_remaining_time(user_id)
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 Status", callback_data="status"),
-                InlineKeyboardButton("📝 List", callback_data="list"),
-            ],
-            [
-                InlineKeyboardButton("🚀 Start Rotation", callback_data="start_rotation"),
-                InlineKeyboardButton("⏹️ Stop Rotation", callback_data="stop_rotation"),
-            ],
-            [
-                InlineKeyboardButton("📖 Help", callback_data="help"),
-                InlineKeyboardButton("ℹ️ About", callback_data="about"),
-            ],
-            [
-                InlineKeyboardButton("💳 Renew Plan", callback_data="buy_plan"),
-            ],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await safe_reply_text(
-            update,
-            f"""{format_header("✅ Welcome Back!", "👋")}
-
-┌─ 👤 USER INFO
-│
-  • ID: {user_id}
-  • Name: {user.first_name or 'Unknown'}
-  • Status: 🟢 Active
-  • Plan: {user_manager.users[str(user_id)].get('plan', 'N/A')}
-  • Remaining: {remaining}
-│
-├─ 🚀 GET STARTED
-│
-  • Use the buttons below to control the bot
-  • Check /help for commands
-  • Renew your plan before it expires
-│
-└─
-
-💡 You have full access to all features!""",
-            reply_markup=reply_markup
-        )
+        await animate_user_start(update, context, user_manager, user_id)
         return
     
+    # User is not active - show restricted access
     await animate_initialization(update, context, user_manager)
 
 
