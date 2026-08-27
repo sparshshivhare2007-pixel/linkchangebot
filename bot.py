@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from config import *
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 # ========== BOT INIT ==========
 bot = Client("link_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-owner_session = Client(SESSION_PATH, api_id=API_ID, api_hash=API_HASH)
 
 # ========== GLOBAL VARIABLES ==========
 usernames_list = []
@@ -29,42 +28,31 @@ is_running = False
 current_index = 0
 current_username = None
 rotation_task = None
+owner_session = None
+session_connected = False
 
 # ========== HELPER FUNCTIONS ==========
 
 def parse_delay(time_str):
-    """
-    Convert delay string to seconds
-    Examples:
-    20min -> 1200 seconds
-    20hour -> 72000 seconds
-    2sec -> 2 seconds
-    1hour 30min -> 5400 seconds
-    20min 30sec -> 1230 seconds
-    """
+    """Convert delay string to seconds"""
     time_str = time_str.lower().strip()
     seconds = 0
     
-    # Extract hours
     hour_match = re.search(r'(\d+)\s*(?:hour|hr|h)', time_str)
     if hour_match:
         seconds += int(hour_match.group(1)) * 3600
     
-    # Extract minutes
     min_match = re.search(r'(\d+)\s*(?:min|m)', time_str)
     if min_match:
         seconds += int(min_match.group(1)) * 60
     
-    # Extract seconds
     sec_match = re.search(r'(\d+)\s*(?:sec|s)', time_str)
     if sec_match:
         seconds += int(sec_match.group(1))
     
-    # If only number given, treat as minutes (backward compatible)
     if seconds == 0 and time_str.isdigit():
         seconds = int(time_str) * 60
     
-    # Minimum 30 seconds (to avoid rate limit)
     return max(seconds, 30)
 
 def format_delay(seconds):
@@ -84,13 +72,11 @@ def format_delay(seconds):
     return ' '.join(parts) if parts else "0sec"
 
 def save_usernames():
-    """Save usernames to file"""
     with open("usernames.txt", "w") as f:
         for username in usernames_list:
             f.write(f"{username}\n")
 
 def load_usernames():
-    """Load usernames from file"""
     try:
         with open("usernames.txt", "r") as f:
             return [line.strip() for line in f if line.strip()]
@@ -106,41 +92,35 @@ async def change_username():
         logger.error("❌ No usernames in list!")
         return False
     
+    if not session_connected or not owner_session:
+        logger.error("❌ Session not connected!")
+        return False
+    
     try:
-        # Get current username
         username = usernames_list[current_index]
         clean_username = username.replace("@", "").strip()
         
-        # Change channel username
-        await owner_session.set_channel_username(
-            CHANNEL_ID,
-            clean_username
-        )
+        await owner_session.set_channel_username(CHANNEL_ID, clean_username)
         
         current_username = clean_username
         current_index = (current_index + 1) % len(usernames_list)
         
         logger.info(f"✅ Username changed to: @{clean_username}")
         
-        # Send notification
         await bot.send_message(
             OWNER_ID,
             f"✅ **Username Updated!**\n\n"
             f"📛 New: @{clean_username}\n"
             f"📌 Channel: {CHANNEL_ID}\n"
             f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"🔄 Next: {usernames_list[current_index] if usernames_list else 'None'}\n"
+            f"🔄 Next: @{usernames_list[current_index] if usernames_list else 'None'}\n"
             f"⏱ Delay: {format_delay(delay_seconds)}"
         )
-        
         return True
         
     except Exception as e:
         logger.error(f"❌ Error changing username: {e}")
-        await bot.send_message(
-            OWNER_ID,
-            f"❌ **Error!**\n\n{str(e)}"
-        )
+        await bot.send_message(OWNER_ID, f"❌ **Error!**\n\n{str(e)}")
         return False
 
 # ========== ROTATION TASK ==========
@@ -152,18 +132,13 @@ async def rotation_loop():
     
     while is_running:
         try:
-            # Change username
             success = await change_username()
-            
             if success:
-                # Wait for delay
                 logger.info(f"⏳ Waiting {format_delay(delay_seconds)}...")
                 await asyncio.sleep(delay_seconds)
             else:
-                # If failed, wait 5 minutes and retry
                 logger.warning("⚠️ Failed, retrying in 5 minutes...")
                 await asyncio.sleep(300)
-                
         except Exception as e:
             logger.error(f"❌ Rotation loop error: {e}")
             await asyncio.sleep(60)
@@ -176,29 +151,69 @@ async def start_command(client, message: Message):
         await message.reply("❌ You are not authorized!")
         return
     
+    status_text = "✅ Connected" if session_connected else "❌ Not Connected"
+    
     await message.reply(
         f"🤖 **Link Changer Bot**\n\n"
         f"📌 Channel: `{CHANNEL_ID}`\n"
         f"📛 Usernames: {len(usernames_list)} loaded\n"
         f"⏱ Delay: {format_delay(delay_seconds)}\n"
-        f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n\n"
+        f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n"
+        f"🔐 Session: {status_text}\n\n"
         f"**Commands:**\n"
-        f"/addusername @name1, @name2, @name3 - Bulk add\n"
-        f"/done - Finish adding usernames\n"
+        f"/connect - Connect owner session\n"
+        f"/addusername @name1, @name2 - Bulk add\n"
+        f"/done - Finish adding\n"
         f"/setdelay 20min - Set delay\n"
-        f"/setdelay 1hour 30min 10sec - Complex delay\n"
         f"/forcestart - Start rotation\n"
         f"/forcestop - Stop rotation\n"
-        f"/change_now - Change immediately\n"
-        f"/status - Current status\n"
-        f"/list - Show all usernames\n"
-        f"/clear - Clear username list"
+        f"/change_now - Change now\n"
+        f"/status - Check status\n"
+        f"/list - Show usernames\n"
+        f"/clear - Clear list"
     )
+
+@bot.on_message(filters.command("connect"))
+async def connect_session(client, message: Message):
+    global owner_session, session_connected
+    
+    if message.from_user.id != OWNER_ID:
+        await message.reply("❌ Unauthorized!")
+        return
+    
+    if session_connected:
+        await message.reply("✅ Session already connected!")
+        return
+    
+    try:
+        await message.reply("🔄 Connecting to session...")
+        
+        owner_session = Client(SESSION_PATH, api_id=API_ID, api_hash=API_HASH)
+        await owner_session.start()
+        
+        session_connected = True
+        logger.info("✅ Owner session connected!")
+        
+        await message.reply(
+            f"✅ **Session Connected!**\n\n"
+            f"📁 Session: {SESSION_PATH}\n"
+            f"🔐 Status: Active\n\n"
+            f"Now you can add usernames:\n"
+            f"/addusername @name1, @name2, @name3"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Session connection error: {e}")
+        await message.reply(f"❌ **Failed to connect!**\n\n{str(e)}\n\nMake sure session file exists at: {SESSION_PATH}")
 
 @bot.on_message(filters.command("addusername"))
 async def add_username(client, message: Message):
     if message.from_user.id != OWNER_ID:
         await message.reply("❌ Unauthorized!")
+        return
+    
+    if not session_connected:
+        await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if len(message.command) < 2:
@@ -210,16 +225,13 @@ async def add_username(client, message: Message):
         )
         return
     
-    # Extract all usernames
     text = ' '.join(message.command[1:])
     
-    # Split by comma or space
     if ',' in text:
         new_usernames = [name.strip() for name in text.split(',') if name.strip()]
     else:
         new_usernames = [name.strip() for name in text.split() if name.strip()]
     
-    # Clean usernames (remove @ if present)
     cleaned = []
     for name in new_usernames:
         clean = name.replace("@", "").strip()
@@ -274,8 +286,7 @@ async def set_delay(client, message: Message):
             "/setdelay 20min\n"
             "/setdelay 1hour\n"
             "/setdelay 30sec\n"
-            "/setdelay 1hour 30min 10sec\n"
-            "/setdelay 20min 30sec"
+            "/setdelay 1hour 30min 10sec"
         )
         return
     
@@ -287,10 +298,6 @@ async def set_delay(client, message: Message):
         f"⏱ {format_delay(delay_seconds)}\n"
         f"⏰ {delay_seconds} seconds"
     )
-    
-    # If running, restart with new delay
-    if is_running:
-        await message.reply("🔄 Rotation running - will use new delay from next cycle.")
 
 @bot.on_message(filters.command("forcestart"))
 async def force_start(client, message: Message):
@@ -298,6 +305,10 @@ async def force_start(client, message: Message):
     
     if message.from_user.id != OWNER_ID:
         await message.reply("❌ Unauthorized!")
+        return
+    
+    if not session_connected:
+        await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if is_running:
@@ -338,12 +349,16 @@ async def force_stop(client, message: Message):
         rotation_task.cancel()
         rotation_task = None
     
-    await message.reply("⏹ **Rotation Stopped!**\n\nCurrent username will stay as is.")
+    await message.reply("⏹ **Rotation Stopped!**")
 
 @bot.on_message(filters.command("change_now"))
 async def change_now(client, message: Message):
     if message.from_user.id != OWNER_ID:
         await message.reply("❌ Unauthorized!")
+        return
+    
+    if not session_connected:
+        await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if not usernames_list:
@@ -365,10 +380,12 @@ async def status_command(client, message: Message):
         return
     
     next_username = usernames_list[current_index] if usernames_list else "None"
+    status_text = "✅ Connected" if session_connected else "❌ Not Connected"
     
     await message.reply(
         f"📊 **Bot Status**\n\n"
         f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n"
+        f"🔐 Session: {status_text}\n"
         f"📛 Current: @{current_username or 'None'}\n"
         f"📋 Total: {len(usernames_list)} usernames\n"
         f"⏱ Delay: {format_delay(delay_seconds)}\n"
@@ -421,17 +438,14 @@ async def main():
     
     logger.info("🚀 Starting Link Changer Bot...")
     
-    # Load usernames
     usernames_list = load_usernames()
     logger.info(f"📛 Loaded {len(usernames_list)} usernames")
     
-    # Start sessions
+    # Only start bot, session will be connected via /connect command
     await bot.start()
-    await owner_session.start()
-    logger.info("✅ Sessions started!")
-    
+    logger.info("✅ Bot started! Use /connect to connect session.")
     logger.info(f"📌 Channel: {CHANNEL_ID}")
-    logger.info(f"⏱ Delay: {format_delay(delay_seconds)}")
+    logger.info(f"⏱ Default Delay: {format_delay(delay_seconds)}")
     
     await asyncio.Event().wait()
 
