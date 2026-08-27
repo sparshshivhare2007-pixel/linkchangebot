@@ -290,7 +290,7 @@ def format_delay(seconds: int) -> str:
 
 
 # ============================================================
-# ANIMATION HELPERS WITH FLOOD CONTROL
+# SAFE MESSAGE FUNCTIONS WITH FLOOD CONTROL
 # ============================================================
 
 async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
@@ -307,6 +307,10 @@ async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
             print(f"Flood control: waiting {wait_time} seconds...")
             await asyncio.sleep(wait_time + 1)
         except Exception as e:
+            error_str = str(e)
+            # Ignore "Message is not modified" error
+            if "Message is not modified" in error_str:
+                return True
             print(f"Edit error: {e}")
             if attempt == max_retries - 1:
                 return False
@@ -333,6 +337,37 @@ async def safe_reply_text(update, text, reply_markup=None, max_retries=3):
             await asyncio.sleep(1)
     return None
 
+
+async def safe_send_photo(update, photo_path, caption, reply_markup=None, max_retries=3):
+    """Safely send photo with retry on flood error"""
+    for attempt in range(max_retries):
+        try:
+            if reply_markup:
+                return await update.message.reply_photo(
+                    photo=open(photo_path, "rb"),
+                    caption=caption,
+                    reply_markup=reply_markup
+                )
+            else:
+                return await update.message.reply_photo(
+                    photo=open(photo_path, "rb"),
+                    caption=caption
+                )
+        except RetryAfter as e:
+            wait_time = e.retry_after
+            print(f"Flood control: waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time + 1)
+        except Exception as e:
+            print(f"Send photo error: {e}")
+            if attempt == max_retries - 1:
+                return None
+            await asyncio.sleep(1)
+    return None
+
+
+# ============================================================
+# ANIMATION HELPERS
+# ============================================================
 
 async def animate_initialization(update, context, user_manager):
     """Create an animated initialization sequence for non-owners."""
@@ -523,6 +558,10 @@ async def animate_owner_start(update, context, user_manager):
 async def show_plans(update, context):
     """Show available plans with prices."""
     query = update.callback_query
+    
+    if not query or not query.message:
+        return
+    
     keyboard = [
         [
             InlineKeyboardButton("📅 7 Days - ₹150", callback_data="plan_7"),
@@ -538,9 +577,7 @@ async def show_plans(update, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.message.edit_text(
-            f"""{format_header("💳 Choose Your Plan", "💳")}
+    text = f"""{format_header("💳 Choose Your Plan", "💳")}
 
 ┌─ 📋 PLANS
 │
@@ -574,16 +611,28 @@ async def show_plans(update, context):
 │
 └─
 
-💳 Select a plan to proceed with payment.""",
-            reply_markup=reply_markup
-        )
+💳 Select a plan to proceed with payment."""
+    
+    try:
+        await query.message.edit_text(text=text, reply_markup=reply_markup)
     except Exception as e:
-        print(f"Error showing plans: {e}")
+        error_str = str(e)
+        if "Message is not modified" in error_str:
+            # If message is same, send as new message
+            await query.message.reply_text(text=text, reply_markup=reply_markup)
+        else:
+            print(f"Error showing plans: {e}")
+            # Try sending as new message as fallback
+            await query.message.reply_text(text=text, reply_markup=reply_markup)
 
 
 async def show_payment(update, context, plan_days):
     """Show payment details with QR code."""
     query = update.callback_query
+    
+    if not query or not query.message:
+        return
+    
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.first_name
     
@@ -628,22 +677,50 @@ Owner will approve your payment shortly."""
     
     try:
         if qr_exists:
+            # Try to delete current message first
+            try:
+                await query.message.delete()
+            except:
+                pass
+            
+            # Send new message with photo
             with open(qr_path, "rb") as f:
                 await query.message.reply_photo(
                     photo=f,
                     caption=message_text,
                     reply_markup=reply_markup
                 )
-                await query.message.delete()
         else:
-            await query.message.edit_text(
-                f"""{message_text}
+            # QR not found, send text message
+            try:
+                await query.message.edit_text(
+                    text=f"""{message_text}
 
 ⚠️ QR code not found. Please contact owner for payment details.""",
-                reply_markup=reply_markup
-            )
+                    reply_markup=reply_markup
+                )
+            except Exception as e:
+                if "Message is not modified" in str(e):
+                    await query.message.reply_text(
+                        text=f"""{message_text}
+
+⚠️ QR code not found. Please contact owner for payment details.""",
+                        reply_markup=reply_markup
+                    )
+                else:
+                    raise
     except Exception as e:
         print(f"Error showing payment: {e}")
+        # Fallback: send text message
+        try:
+            await query.message.reply_text(
+                text=f"""{message_text}
+
+⚠️ Error displaying QR. Please contact owner for payment details.""",
+                reply_markup=reply_markup
+            )
+        except:
+            pass
 
 
 async def send_to_logger_group(context, text, photo_path=None):
@@ -669,13 +746,17 @@ async def handle_payment_callback(update, context):
     """Handle payment-related callbacks."""
     query = update.callback_query
     
+    # Always answer callback to clear loading state
     try:
         await query.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error answering callback: {e}")
     
     user_manager = context.bot_data.get('user_manager')
     data = query.data
+    
+    # Log callback for debugging
+    print(f"Callback received: {data}")
     
     if data == "buy_plan":
         await show_plans(update, context)
@@ -689,6 +770,7 @@ async def handle_payment_callback(update, context):
     
     elif data.startswith("paid_"):
         payment_id = data.split("_")[1]
+        print(f"Payment clicked: {payment_id}")
         
         if payment_id in user_manager.pending:
             payment = user_manager.pending[payment_id]
@@ -714,9 +796,11 @@ async def handle_payment_callback(update, context):
                 
                 await send_to_logger_group(context, logger_text, qr_path)
                 
+                # Send confirmation to user
                 try:
+                    # Try to edit existing message
                     await query.message.edit_text(
-                        f"""{format_info("✅ Payment Submitted!")}
+                        text=f"""{format_info("✅ Payment Submitted!")}
 
 ┌─ 📤 NOTIFICATION SENT
 │
@@ -729,8 +813,28 @@ async def handle_payment_callback(update, context):
 📢 You will be notified when owner approves your payment.
 ⏱️ This usually takes a few minutes."""
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Error editing confirmation: {e}")
+                    # Try sending new message
+                    try:
+                        await query.message.reply_text(
+                            text=f"""{format_info("✅ Payment Submitted!")}
+
+┌─ 📤 NOTIFICATION SENT
+│
+  • Payment ID: `{payment_id}`
+  • Status: ⏳ Waiting for verification
+  • Owner has been notified in logger group
+│
+└─
+
+📢 You will be notified when owner approves your payment.
+⏱️ This usually takes a few minutes."""
+                        )
+                    except:
+                        pass
+                
+                return
     
     elif data.startswith("refresh_"):
         payment_id = data.split("_")[1]
@@ -741,7 +845,7 @@ async def handle_payment_callback(update, context):
             try:
                 if status == "approved":
                     await query.message.edit_text(
-                        f"""{format_success("🎉 Payment Approved!")}
+                        text=f"""{format_success("🎉 Payment Approved!")}
 
 ┌─ ✅ ACCESS GRANTED
 │
@@ -755,7 +859,7 @@ async def handle_payment_callback(update, context):
                     )
                 elif status == "rejected":
                     await query.message.edit_text(
-                        f"""{format_error("❌ Payment Rejected")}
+                        text=f"""{format_error("❌ Payment Rejected")}
 
 ┌─ ❌ PAYMENT FAILED
 │
@@ -769,7 +873,7 @@ async def handle_payment_callback(update, context):
                     )
                 else:
                     await query.message.edit_text(
-                        f"""{format_info("⏳ Still Waiting")}
+                        text=f"""{format_info("⏳ Still Waiting")}
 
 ┌─ ⏳ PENDING
 │
@@ -781,8 +885,8 @@ async def handle_payment_callback(update, context):
 
 ⏱️ Please wait for owner to verify your payment."""
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error refreshing status: {e}")
     
     elif data == "pending_payments":
         pending = user_manager.get_pending_payments()
@@ -812,13 +916,13 @@ async def handle_payment_callback(update, context):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             try:
-                await query.message.edit_text(text, reply_markup=reply_markup)
-            except Exception:
-                pass
+                await query.message.edit_text(text=text, reply_markup=reply_markup)
+            except Exception as e:
+                print(f"Error showing pending: {e}")
         else:
             try:
                 await query.message.edit_text(
-                    f"""{format_info("No Pending Payments")}
+                    text=f"""{format_info("No Pending Payments")}
 
 ┌─ 📭 EMPTY
 │
@@ -829,8 +933,8 @@ async def handle_payment_callback(update, context):
                         [InlineKeyboardButton("🔙 Back", callback_data="back")]
                     ])
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error showing empty pending: {e}")
     
     elif data == "list_users":
         users = user_manager.users
@@ -861,13 +965,13 @@ async def handle_payment_callback(update, context):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             try:
-                await query.message.edit_text(text, reply_markup=reply_markup)
-            except Exception:
-                pass
+                await query.message.edit_text(text=text, reply_markup=reply_markup)
+            except Exception as e:
+                print(f"Error showing users: {e}")
         else:
             try:
                 await query.message.edit_text(
-                    f"""{format_info("No Users")}
+                    text=f"""{format_info("No Users")}
 
 ┌─ 📭 EMPTY
 │
@@ -877,8 +981,8 @@ async def handle_payment_callback(update, context):
                         [InlineKeyboardButton("🔙 Back", callback_data="back")]
                     ])
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error showing empty users: {e}")
     
     elif data == "list_sudo":
         sudo_users = user_manager.get_sudo_users()
@@ -908,13 +1012,13 @@ async def handle_payment_callback(update, context):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             try:
-                await query.message.edit_text(text, reply_markup=reply_markup)
-            except Exception:
-                pass
+                await query.message.edit_text(text=text, reply_markup=reply_markup)
+            except Exception as e:
+                print(f"Error showing sudo users: {e}")
         else:
             try:
                 await query.message.edit_text(
-                    f"""{format_info("No Sudo Users")}
+                    text=f"""{format_info("No Sudo Users")}
 
 ┌─ 📭 EMPTY
 │
@@ -925,35 +1029,38 @@ async def handle_payment_callback(update, context):
                         [InlineKeyboardButton("🔙 Back", callback_data="back")]
                     ])
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error showing empty sudo: {e}")
     
     elif data == "refresh_pending":
         try:
             await query.message.delete()
-        except Exception:
+        except:
             pass
         await pending_command(update, context)
     
     elif data == "refresh_users":
         try:
             await query.message.delete()
-        except Exception:
+        except:
             pass
         await users_command(update, context)
     
     elif data == "refresh_sudo":
         try:
             await query.message.delete()
-        except Exception:
+        except:
             pass
         await sudo_list_command(update, context)
     
     elif data == "back":
-        if user_manager.is_owner(query.from_user.id):
-            await animate_owner_start(update, context, user_manager)
-        else:
-            await animate_initialization(update, context, user_manager)
+        try:
+            if user_manager.is_owner(query.from_user.id):
+                await animate_owner_start(update, context, user_manager)
+            else:
+                await animate_initialization(update, context, user_manager)
+        except Exception as e:
+            print(f"Error going back: {e}")
     
     elif data == "help":
         if user_manager.is_owner(query.from_user.id):
@@ -983,14 +1090,15 @@ async def handle_payment_callback(update, context):
 async def show_owner_help(update, context):
     """Show help for owner."""
     query = update.callback_query
+    if not query or not query.message:
+        return
+    
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.message.edit_text(
-            f"""{format_header("📖 Owner Help", "📖")}
+    text = f"""{format_header("📖 Owner Help", "📖")}
 
 ┌─ 📚 COMMANDS
 │
@@ -1030,25 +1138,27 @@ async def show_owner_help(update, context):
 │
 └─
 
-💡 Use buttons for quick access!""",
-            reply_markup=reply_markup
-        )
-    except Exception:
-        pass
+💡 Use buttons for quick access!"""
+    
+    try:
+        await query.message.edit_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"Error showing owner help: {e}")
 
 
 async def show_public_help(update, context):
     """Show help for public users."""
     query = update.callback_query
+    if not query or not query.message:
+        return
+    
     keyboard = [
         [InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan")],
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.message.edit_text(
-            f"""{format_header("📖 Help", "📖")}
+    text = f"""{format_header("📖 Help", "📖")}
 
 ┌─ ℹ️ INFORMATION
 │
@@ -1064,24 +1174,26 @@ async def show_public_help(update, context):
 │
 └─
 
-📌 Click "Buy Plan" to get started!""",
-            reply_markup=reply_markup
-        )
-    except Exception:
-        pass
+📌 Click "Buy Plan" to get started!"""
+    
+    try:
+        await query.message.edit_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"Error showing public help: {e}")
 
 
 async def show_about(update, context):
     """Show about information."""
     query = update.callback_query
+    if not query or not query.message:
+        return
+    
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.message.edit_text(
-            f"""{format_header("ℹ️ About Bot", "ℹ️")}
+    text = f"""{format_header("ℹ️ About Bot", "ℹ️")}
 
 ┌─ 🤖 BOT INFO
 │
@@ -1105,24 +1217,26 @@ async def show_about(update, context):
 │
 └─
 
-Made with ❤️ using Python""",
-            reply_markup=reply_markup
-        )
-    except Exception:
-        pass
+Made with ❤️ using Python"""
+    
+    try:
+        await query.message.edit_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"Error showing about: {e}")
 
 
 async def show_contact(update, context):
     """Show contact information."""
     query = update.callback_query
+    if not query or not query.message:
+        return
+    
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.message.edit_text(
-            f"""{format_header("📞 Contact", "📞")}
+    text = f"""{format_header("📞 Contact", "📞")}
 
 ┌─ 📬 CONTACT INFO
 │
@@ -1132,11 +1246,12 @@ async def show_contact(update, context):
 │
 └─
 
-📌 Owner will respond within 24 hours.""",
-            reply_markup=reply_markup
-        )
-    except Exception:
-        pass
+📌 Owner will respond within 24 hours."""
+    
+    try:
+        await query.message.edit_text(text=text, reply_markup=reply_markup)
+    except Exception as e:
+        print(f"Error showing contact: {e}")
 
 
 # ============================================================
@@ -2415,13 +2530,29 @@ async def current_command(update, context):
 
 async def error_handler(update, context):
     """Handle errors globally with flood control."""
-    print("Bot error:", context.error)
+    error = context.error
+    error_str = str(error)
+    
+    # Ignore harmless errors
+    harmless_errors = [
+        "Message is not modified",
+        "Query is too old",
+        "Query_id_invalid",
+        "Message to edit not found",
+        "Message can't be edited"
+    ]
+    
+    for harmless in harmless_errors:
+        if harmless in error_str:
+            print(f"⚠️ Ignored harmless error: {error_str[:100]}...")
+            return
+    
+    print(f"❌ Bot error: {error}")
     
     # Check if error is RetryAfter (flood control)
-    if isinstance(context.error, RetryAfter):
-        wait_time = context.error.retry_after
-        print(f"Flood control: Need to wait {wait_time} seconds")
-        # Store wait time in context for retry
+    if isinstance(error, RetryAfter):
+        wait_time = error.retry_after
+        print(f"⏳ Flood control: Need to wait {wait_time} seconds")
         context.bot_data['flood_wait'] = wait_time
         return
     
@@ -2452,6 +2583,8 @@ def main():
     if not os.path.exists("qr.jpg"):
         print("⚠️ Warning: qr.jpg not found in root directory!")
         print("   Please add qr.jpg for payment QR code.")
+    else:
+        print("✅ QR Code found!")
     
     user_manager = UserManager()
     application = Application.builder().token(config.BOT_TOKEN).build()
