@@ -29,7 +29,10 @@ A powerful Telegram bot for automatic username rotation with payment integration
 git clone https://github.com/yourusername/telegram-link-changer.git
 cd telegram-link-changer
 ```
+
 ### 2. Install Dependencies
+```
+
 bash
 pip install -r requirements.txt
 3. Configure Environment
@@ -139,6 +142,7 @@ MIT License
 text
 
 ---
+```
 
 ## 📁 .env.example
 
