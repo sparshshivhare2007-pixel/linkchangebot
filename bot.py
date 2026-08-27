@@ -1,539 +1,1397 @@
 import asyncio
-import re
 import json
-from datetime import datetime
-from telethon import TelegramClient, events
+import os
+import re
+from typing import Optional
+
+from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.errors import FloodWaitError
-from config import *
+from telethon.tl.functions.channels import UpdateUsernameRequest
+from telethon.errors import (
+    FloodWaitError,
+    UsernameInvalidError,
+    UsernameOccupiedError,
+    RPCError,
+)
 
-# ========== BOT INIT ==========
-print("🚀 Starting Link Changer Bot (Telethon)...")
-# NOTE: Do NOT call .start(...) here. Creating the client without
-# connecting keeps it bound to the loop that will actually run it.
-bot = TelegramClient('bot_session', API_ID, API_HASH)
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
-# ========== GLOBAL VARIABLES ==========
-usernames_list = []
-delay_seconds = 3600
-is_running = False
-current_index = 0
-current_username = None
-rotation_task = None
-owner_session = None
-session_connected = False
+import config
 
-# ========== SESSION STORAGE ==========
-SESSION_FILE = "session_data.json"
 
-def save_session_string(sess_str):
-    with open(SESSION_FILE, "w") as f:
-        json.dump({"session_string": sess_str}, f)
-    print("✅ Session string saved")
+# ============================================================
+# FILE FUNCTIONS
+# ============================================================
 
-def load_session_string():
+def load_json(filename, default):
+
+    if not os.path.exists(filename):
+
+        save_json(filename, default)
+
+        return default
+
     try:
-        with open(SESSION_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("session_string")
-    except:
-        return None
 
-# ========== HELPER FUNCTIONS ==========
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-def parse_delay(time_str):
-    time_str = time_str.lower().strip()
-    seconds = 0
+    except Exception:
 
-    hour_match = re.search(r'(\d+)\s*(?:hour|hr|h)', time_str)
-    if hour_match:
-        seconds += int(hour_match.group(1)) * 3600
+        return default
 
-    min_match = re.search(r'(\d+)\s*(?:min|m)', time_str)
-    if min_match:
-        seconds += int(min_match.group(1)) * 60
 
-    sec_match = re.search(r'(\d+)\s*(?:sec|s)', time_str)
-    if sec_match:
-        seconds += int(sec_match.group(1))
+def save_json(filename, data):
 
-    if seconds == 0 and time_str.isdigit():
-        seconds = int(time_str) * 60
+    with open(filename, "w", encoding="utf-8") as f:
 
-    return max(seconds, 30)
+        json.dump(
+            data,
+            f,
+            indent=4
+        )
 
-def format_delay(seconds):
-    hours = seconds // 3600
-    minutes = (seconds % 3600) // 60
-    secs = seconds % 60
-
-    parts = []
-    if hours > 0:
-        parts.append(f"{hours}hour{'s' if hours > 1 else ''}")
-    if minutes > 0:
-        parts.append(f"{minutes}min{'s' if minutes > 1 else ''}")
-    if secs > 0:
-        parts.append(f"{secs}sec{'s' if secs > 1 else ''}")
-
-    return ' '.join(parts) if parts else "0sec"
-
-def save_usernames():
-    with open("usernames.txt", "w") as f:
-        for username in usernames_list:
-            f.write(f"{username}\n")
 
 def load_usernames():
-    try:
-        with open("usernames.txt", "r") as f:
-            return [line.strip() for line in f if line.strip()]
-    except:
+
+    if not os.path.exists(config.USERNAMES_FILE):
         return []
 
-# ========== CHANGE USERNAME ==========
+    with open(
+        config.USERNAMES_FILE,
+        "r",
+        encoding="utf-8"
+    ) as f:
 
-async def change_username():
-    global current_index, current_username
+        return [
+            line.strip()
+            for line in f
+            if line.strip()
+        ]
 
-    print(f"🔹 Changing username...")
 
-    if not usernames_list:
-        print("❌ No usernames!")
+def save_usernames(names):
+
+    with open(
+        config.USERNAMES_FILE,
+        "w",
+        encoding="utf-8"
+    ) as f:
+
+        for name in names:
+            f.write(name + "\n")
+
+
+# ============================================================
+# GLOBAL DATA
+# ============================================================
+
+session_data = load_json(
+    config.SESSION_FILE,
+    {
+        "session": ""
+    }
+)
+
+target_data = load_json(
+    config.TARGET_FILE,
+    {
+        "target_id": config.DEFAULT_TARGET_ID,
+        "target_type": "channel",
+        "target_link": ""
+    }
+)
+
+usernames = load_usernames()
+
+delay_seconds = 60
+
+rotation_task: Optional[asyncio.Task] = None
+
+client: Optional[TelegramClient] = None
+
+current_index = 0
+
+
+# ============================================================
+# OWNER CHECK
+# ============================================================
+
+def is_owner(update):
+
+    if not update.effective_user:
         return False
 
-    if not session_connected or not owner_session:
-        print("❌ Session not connected!")
+    return (
+        update.effective_user.id
+        == config.OWNER_ID
+    )
+
+
+async def owner_only(update):
+
+    if not is_owner(update):
+
+        if update.message:
+
+            await update.message.reply_text(
+                "❌ You are not authorized."
+            )
+
         return False
+
+    return True
+
+
+# ============================================================
+# TELETHON SESSION
+# ============================================================
+
+async def connect_saved_session():
+
+    global client
+
+    session = session_data.get(
+        "session",
+        ""
+    )
+
+    if not session:
+        return None
 
     try:
-        username = usernames_list[current_index]
-        clean_username = username.replace("@", "").strip()
 
-        print(f"🔹 Changing to: @{clean_username}")
-
-        # Get channel entity
-        channel = await owner_session.get_entity(CHANNEL_ID)
-
-        # Change username
-        await owner_session.edit_channel_username(channel, clean_username)
-
-        current_username = clean_username
-        current_index = (current_index + 1) % len(usernames_list)
-
-        print(f"✅ Changed to: @{clean_username}")
-
-        await bot.send_message(
-            OWNER_ID,
-            f"✅ **Username Updated!**\n\n"
-            f"📛 New: @{clean_username}\n"
-            f"📌 Channel: {CHANNEL_ID}\n"
-            f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"🔄 Next: @{usernames_list[current_index] if usernames_list else 'None'}\n"
-            f"⏱ Delay: {format_delay(delay_seconds)}"
+        new_client = TelegramClient(
+            StringSession(session),
+            config.API_ID,
+            config.API_HASH
         )
-        return True
+
+        await new_client.connect()
+
+        if not await new_client.is_user_authorized():
+
+            await new_client.disconnect()
+
+            return None
+
+        client = new_client
+
+        print("Telegram user session connected.")
+
+        return client
+
+    except Exception as e:
+
+        print(
+            "Session connection failed:",
+            e
+        )
+
+        return None
+
+
+async def ensure_client():
+
+    global client
+
+    if client:
+
+        try:
+
+            if client.is_connected():
+
+                if await client.is_user_authorized():
+
+                    return client
+
+        except Exception:
+            pass
+
+    return await connect_saved_session()
+
+
+# ============================================================
+# DELAY PARSER
+# ============================================================
+
+def parse_delay(text):
+
+    text = text.lower().strip()
+
+    pattern = (
+        r"(\d+)\s*"
+        r"(hour|hours|hr|hrs|"
+        r"min|mins|minute|minutes|"
+        r"sec|secs|second|seconds)"
+    )
+
+    matches = re.findall(
+        pattern,
+        text
+    )
+
+    if not matches:
+
+        raise ValueError(
+            "Invalid delay format.\n\n"
+            "Examples:\n"
+            "20min\n"
+            "1hour\n"
+            "30sec\n"
+            "1hour 30min\n"
+            "1hour 30min 10sec"
+        )
+
+    total = 0
+
+    for value, unit in matches:
+
+        value = int(value)
+
+        if unit in [
+            "hour",
+            "hours",
+            "hr",
+            "hrs"
+        ]:
+
+            total += value * 3600
+
+        elif unit in [
+            "min",
+            "mins",
+            "minute",
+            "minutes"
+        ]:
+
+            total += value * 60
+
+        elif unit in [
+            "sec",
+            "secs",
+            "second",
+            "seconds"
+        ]:
+
+            total += value
+
+    if total <= 0:
+
+        raise ValueError(
+            "Delay must be greater than zero."
+        )
+
+    return total
+
+
+def format_delay(seconds):
+
+    hours = seconds // 3600
+
+    seconds %= 3600
+
+    minutes = seconds // 60
+
+    seconds %= 60
+
+    result = []
+
+    if hours:
+        result.append(f"{hours}h")
+
+    if minutes:
+        result.append(f"{minutes}m")
+
+    if seconds:
+        result.append(f"{seconds}s")
+
+    return " ".join(result) or "0s"
+
+
+# ============================================================
+# USERNAME
+# ============================================================
+
+def normalize_username(username):
+
+    username = username.strip()
+
+    if username.startswith("@"):
+        username = username[1:]
+
+    return username
+
+
+# ============================================================
+# RESOLVE TELEGRAM TARGET
+# ============================================================
+
+async def resolve_target(link):
+
+    tg = await ensure_client()
+
+    if not tg:
+
+        raise RuntimeError(
+            "No Telegram session connected."
+        )
+
+    link = link.strip()
+
+    try:
+
+        if "t.me/" in link:
+
+            username = link.split(
+                "t.me/",
+                1
+            )[1]
+
+            username = username.split(
+                "?",
+                1
+            )[0]
+
+            username = username.rstrip("/")
+
+            entity = await tg.get_entity(
+                username
+            )
+
+        else:
+
+            entity = await tg.get_entity(
+                link
+            )
+
+        return entity
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"Could not resolve target: {e}"
+        )
+
+
+# ============================================================
+# SAVE TARGET
+# ============================================================
+
+async def set_target(
+    link,
+    target_type
+):
+
+    entity = await resolve_target(link)
+
+    target_id = entity.id
+
+    target_data.update(
+        {
+            "target_id": target_id,
+            "target_type": target_type,
+            "target_link": link
+        }
+    )
+
+    save_json(
+        config.TARGET_FILE,
+        target_data
+    )
+
+    return entity
+
+
+# ============================================================
+# CHANGE USERNAME
+# ============================================================
+
+async def change_username(username):
+
+    tg = await ensure_client()
+
+    if not tg:
+
+        return (
+            False,
+            "Telegram session not connected."
+        )
+
+    target_id = target_data.get(
+        "target_id"
+    )
+
+    if not target_id:
+
+        return (
+            False,
+            "No target set."
+        )
+
+    username = normalize_username(
+        username
+    )
+
+    try:
+
+        entity = await tg.get_entity(
+            target_id
+        )
+
+        # Telegram username update is supported
+        # for channel-type entities.
+        if not getattr(
+            entity,
+            "broadcast",
+            False
+        ):
+
+            return (
+                False,
+                "Target is not a broadcast channel. "
+                "Telegram does not allow this "
+                "username operation on an ordinary group."
+            )
+
+        await tg(
+            UpdateUsernameRequest(
+                entity,
+                username
+            )
+        )
+
+        return (
+            True,
+            username
+        )
 
     except FloodWaitError as e:
-        print(f"⏳ Flood wait: {e.seconds} seconds")
-        await asyncio.sleep(e.seconds)
-        return False
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        await bot.send_message(OWNER_ID, f"❌ **Error!**\n\n{str(e)}")
-        return False
 
-# ========== ROTATION TASK ==========
+        return (
+            False,
+            f"FloodWait: wait {e.seconds} seconds."
+        )
+
+    except UsernameOccupiedError:
+
+        return (
+            False,
+            f"@{username} is already occupied."
+        )
+
+    except UsernameInvalidError:
+
+        return (
+            False,
+            f"@{username} is invalid."
+        )
+
+    except RPCError as e:
+
+        return (
+            False,
+            f"Telegram error: {e}"
+        )
+
+    except Exception as e:
+
+        return (
+            False,
+            str(e)
+        )
+
+
+# ============================================================
+# ROTATION
+# ============================================================
 
 async def rotation_loop():
-    global is_running
 
-    print("🔄 Rotation started!")
+    global current_index
 
-    while is_running:
-        try:
-            success = await change_username()
-            if success:
-                print(f"⏳ Waiting {format_delay(delay_seconds)}...")
-                await asyncio.sleep(delay_seconds)
-            else:
-                print("⚠️ Retrying in 5 minutes...")
-                await asyncio.sleep(300)
-        except Exception as e:
-            print(f"❌ Loop error: {e}")
-            await asyncio.sleep(60)
+    print("Rotation started.")
 
-# ========== BOT COMMANDS ==========
+    while True:
 
-@bot.on(events.NewMessage(pattern='/start'))
-async def start_command(event):
-    print(f"📥 /start from: {event.sender_id}")
+        if not usernames:
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+            print(
+                "No usernames available."
+            )
+
+            break
+
+        if not target_data.get(
+            "target_id"
+        ):
+
+            print(
+                "No target configured."
+            )
+
+            break
+
+        username = usernames[
+            current_index
+        ]
+
+        success, result = (
+            await change_username(
+                username
+            )
+        )
+
+        if success:
+
+            print(
+                f"Username changed: "
+                f"@{result}"
+            )
+
+            current_index = (
+                current_index + 1
+            ) % len(usernames)
+
+            await asyncio.sleep(
+                delay_seconds
+            )
+
+        else:
+
+            print(
+                "Username change failed:",
+                result
+            )
+
+            # If Telegram explicitly asks us to wait,
+            # respect that wait.
+            if "FloodWait" in result:
+
+                match = re.search(
+                    r"(\d+)\s+seconds",
+                    result
+                )
+
+                if match:
+
+                    wait = int(
+                        match.group(1)
+                    )
+
+                    await asyncio.sleep(
+                        wait
+                    )
+
+                    continue
+
+            await asyncio.sleep(
+                max(
+                    delay_seconds,
+                    60
+                )
+            )
+
+    print("Rotation stopped.")
+
+
+# ============================================================
+# /START
+# ============================================================
+
+async def start_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
         return
 
-    status = "✅ Connected" if session_connected else "❌ Not Connected"
+    text = """
+🤖 Telegram Link Changer Bot
 
-    await event.reply(
-        f"🤖 **Link Changer Bot**\n\n"
-        f"📌 Channel: `{CHANNEL_ID}`\n"
-        f"📛 Usernames: {len(usernames_list)}\n"
-        f"⏱ Delay: {format_delay(delay_seconds)}\n"
-        f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n"
-        f"🔐 Session: {status}\n\n"
-        f"**Commands:**\n"
-        f"/connect <session_string> - Connect session\n"
-        f"/addusername @name1, @name2 - Bulk add\n"
-        f"/done - Finish adding\n"
-        f"/setdelay 20min - Set delay\n"
-        f"/forcestart - Start rotation\n"
-        f"/forcestop - Stop rotation\n"
-        f"/change_now - Change now\n"
-        f"/status - Check status\n"
-        f"/list - Show usernames\n"
-        f"/clear - Clear list"
+SESSION:
+/connect <session>
+
+TARGET:
+/addchannel <link>
+/addgroup <link>
+
+/addusername @name1, @name2
+/done
+/setdelay 20min
+
+CONTROL:
+/forcestart
+/forcestop
+/change_now
+
+INFO:
+/status
+/list
+/clear
+/current
+"""
+
+    await update.message.reply_text(
+        text
     )
 
-@bot.on(events.NewMessage(pattern='/connect'))
-async def connect_session(event):
-    global owner_session, session_connected
 
-    print(f"📥 /connect from: {event.sender_id}")
+# ============================================================
+# /CONNECT
+# ============================================================
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+async def connect_command(
+    update,
+    context
+):
+
+    global client
+
+    if not await owner_only(update):
         return
 
-    if session_connected:
-        await event.reply("✅ Session already connected!")
+    if not context.args:
+
+        await update.message.reply_text(
+            "Usage:\n"
+            "/connect <session_string>"
+        )
+
         return
 
-    # Get session string from command
-    parts = event.raw_text.split()
-    session_string = None
-
-    if len(parts) > 1:
-        session_string = parts[1]
-        save_session_string(session_string)
-        await event.reply("🔄 Connecting with session...")
-    else:
-        saved = load_session_string()
-        if saved:
-            session_string = saved
-            await event.reply("🔄 Loading saved session...")
-        else:
-            await event.reply(
-                "❌ No session string!\n\n"
-                "Usage: `/connect <session_string>`"
-            )
-            return
+    session_string = (
+        context.args[0].strip()
+    )
 
     try:
-        owner_session = TelegramClient(
-            StringSession(session_string),
-            API_ID,
-            API_HASH
-        )
-        await owner_session.start()
-        session_connected = True
 
-        print("✅ Session connected!")
-        await event.reply(
-            f"✅ **Session Connected!**\n\n"
-            f"🔐 Status: Active\n"
-            f"📌 Channel: {CHANNEL_ID}\n\n"
-            f"Now add usernames:\n"
-            f"/addusername @name1, @name2"
+        test_client = TelegramClient(
+            StringSession(
+                session_string
+            ),
+            config.API_ID,
+            config.API_HASH
+        )
+
+        await test_client.connect()
+
+        if not await test_client.is_user_authorized():
+
+            await test_client.disconnect()
+
+            await update.message.reply_text(
+                "❌ Invalid session."
+            )
+
+            return
+
+        me = await test_client.get_me()
+
+        session_data[
+            "session"
+        ] = session_string
+
+        save_json(
+            config.SESSION_FILE,
+            session_data
+        )
+
+        if client:
+
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+        client = test_client
+
+        await update.message.reply_text(
+            "✅ Session connected.\n\n"
+            f"Account ID: {me.id}\n"
+            f"Name: {me.first_name or 'Unknown'}"
         )
 
     except Exception as e:
-        print(f"❌ Session error: {e}")
-        session_connected = False
-        await event.reply(f"❌ Connection failed!\n\n{str(e)}")
 
-@bot.on(events.NewMessage(pattern='/addusername'))
-async def add_username(event):
-    print(f"📥 /addusername from: {event.sender_id}")
+        await update.message.reply_text(
+            f"❌ Connection failed:\n{e}"
+        )
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+
+# ============================================================
+# /ADDCHANNEL
+# ============================================================
+
+async def addchannel_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
         return
 
-    if not session_connected:
-        await event.reply("❌ Connect first: /connect")
+    if not context.args:
+
+        await update.message.reply_text(
+            "Usage:\n"
+            "/addchannel https://t.me/channelname"
+        )
+
         return
 
-    text = event.raw_text.replace('/addusername', '').strip()
+    link = context.args[0]
 
-    if not text:
-        await event.reply("❌ Usage: /addusername @name1, @name2, @name3")
+    try:
+
+        entity = await set_target(
+            link,
+            "channel"
+        )
+
+        await update.message.reply_text(
+            "✅ Channel added!\n\n"
+            f"ID: {entity.id}\n"
+            f"Link: {link}"
+        )
+
+    except Exception as e:
+
+        await update.message.reply_text(
+            f"❌ Failed:\n{e}"
+        )
+
+
+# ============================================================
+# /ADDGROUP
+# ============================================================
+
+async def addgroup_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
         return
 
-    if ',' in text:
-        new_usernames = [n.strip() for n in text.split(',') if n.strip()]
-    else:
-        new_usernames = [n.strip() for n in text.split() if n.strip()]
+    if not context.args:
 
-    cleaned = []
-    for name in new_usernames:
-        clean = name.replace("@", "").strip()
-        if clean and clean not in usernames_list:
-            cleaned.append(clean)
+        await update.message.reply_text(
+            "Usage:\n"
+            "/addgroup https://t.me/groupname"
+        )
 
-    if not cleaned:
-        await event.reply("❌ No valid usernames!")
         return
 
-    usernames_list.extend(cleaned)
-    save_usernames()
+    link = context.args[0]
 
-    await event.reply(
-        f"✅ Added {len(cleaned)} username(s)!\n\n"
-        f"📝 Total: {len(usernames_list)}\n"
-        f"📛 Added: {', '.join(['@' + n for n in cleaned])}\n\n"
-        f"Type /done when finished"
+    try:
+
+        entity = await set_target(
+            link,
+            "group"
+        )
+
+        await update.message.reply_text(
+            "✅ Group added!\n\n"
+            f"ID: {entity.id}\n"
+            f"Link: {link}\n\n"
+            "⚠️ Target is saved, but ordinary "
+            "groups do not support the same "
+            "username-update API as broadcast channels."
+        )
+
+    except Exception as e:
+
+        await update.message.reply_text(
+            f"❌ Failed:\n{e}"
+        )
+
+
+# ============================================================
+# /ADDUSERNAME
+# ============================================================
+
+async def addusername_command(
+    update,
+    context
+):
+
+    global usernames
+
+    if not await owner_only(update):
+        return
+
+    if not context.args:
+
+        await update.message.reply_text(
+            "Usage:\n"
+            "/addusername @name1, @name2"
+        )
+
+        return
+
+    raw = " ".join(
+        context.args
     )
 
-@bot.on(events.NewMessage(pattern='/done'))
-async def done_command(event):
-    print(f"📥 /done from: {event.sender_id}")
+    names = [
+        normalize_username(x)
+        for x in raw.split(",")
+        if x.strip()
+    ]
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+    added = 0
+
+    for name in names:
+
+        if name and name not in usernames:
+
+            usernames.append(name)
+
+            added += 1
+
+    save_usernames(usernames)
+
+    await update.message.reply_text(
+        f"✅ Added: {added}\n"
+        f"Total: {len(usernames)}"
+    )
+
+
+# ============================================================
+# /DONE
+# ============================================================
+
+async def done_command(
+    update,
+    context
+):
+
+    global usernames
+
+    if not await owner_only(update):
         return
 
-    if not usernames_list:
-        await event.reply("❌ No usernames! Use /addusername")
+    usernames = load_usernames()
+
+    await update.message.reply_text(
+        "✅ Username list finalized.\n\n"
+        f"Total usernames: {len(usernames)}"
+    )
+
+
+# ============================================================
+# /SETDELAY
+# ============================================================
+
+async def setdelay_command(
+    update,
+    context
+):
+
+    global delay_seconds
+
+    if not await owner_only(update):
         return
 
-    save_usernames()
+    if not context.args:
 
-    response = f"✅ Done! {len(usernames_list)} usernames saved.\n\n"
-    for i, name in enumerate(usernames_list[:10]):
-        response += f"{i+1}. @{name}\n"
-    if len(usernames_list) > 10:
-        response += f"... and {len(usernames_list) - 10} more\n"
-    response += f"\nSet delay: /setdelay 20min\n"
-    response += f"Start: /forcestart"
-
-    await event.reply(response)
-
-@bot.on(events.NewMessage(pattern='/setdelay'))
-async def set_delay(event):
-    print(f"📥 /setdelay from: {event.sender_id}")
-
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
-        return
-
-    text = event.raw_text.replace('/setdelay', '').strip()
-
-    if not text:
-        await event.reply(
-            "❌ Usage: /setdelay 20min\n\n"
+        await update.message.reply_text(
             "Examples:\n"
             "/setdelay 20min\n"
             "/setdelay 1hour\n"
-            "/setdelay 30sec\n"
-            "/setdelay 1hour 30min"
+            "/setdelay 1hour 30min 10sec"
         )
+
         return
 
-    global delay_seconds
-    delay_seconds = parse_delay(text)
-
-    await event.reply(
-        f"✅ Delay set!\n\n"
-        f"⏱ {format_delay(delay_seconds)}\n"
-        f"⏰ {delay_seconds} seconds"
+    text = " ".join(
+        context.args
     )
 
-@bot.on(events.NewMessage(pattern='/forcestart'))
-async def force_start(event):
-    global is_running, rotation_task
+    try:
 
-    print(f"📥 /forcestart from: {event.sender_id}")
+        delay_seconds = parse_delay(
+            text
+        )
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+        await update.message.reply_text(
+            "✅ Delay set.\n\n"
+            f"Delay: {format_delay(delay_seconds)}"
+        )
+
+    except ValueError as e:
+
+        await update.message.reply_text(
+            f"❌ {e}"
+        )
+
+
+# ============================================================
+# /FORCESTART
+# ============================================================
+
+async def forcestart_command(
+    update,
+    context
+):
+
+    global rotation_task
+
+    if not await owner_only(update):
         return
 
-    if not session_connected:
-        await event.reply("❌ Connect first: /connect")
+    if not target_data.get(
+        "target_id"
+    ):
+
+        await update.message.reply_text(
+            "❌ No target set!\n"
+            "Use /addgroup or /addchannel"
+        )
+
         return
 
-    if is_running:
-        await event.reply("⚠️ Already running!")
+    if not usernames:
+
+        await update.message.reply_text(
+            "❌ No usernames added."
+        )
+
         return
 
-    if not usernames_list:
-        await event.reply("❌ Add usernames first: /addusername")
+    tg = await ensure_client()
+
+    if not tg:
+
+        await update.message.reply_text(
+            "❌ Telegram session not connected."
+        )
+
         return
 
-    is_running = True
-    rotation_task = asyncio.create_task(rotation_loop())
+    if (
+        rotation_task
+        and not rotation_task.done()
+    ):
 
-    await event.reply(
-        f"🚀 **Rotation Started!**\n\n"
-        f"📛 Usernames: {len(usernames_list)}\n"
-        f"⏱ Delay: {format_delay(delay_seconds)}\n"
-        f"📌 Channel: {CHANNEL_ID}"
+        await update.message.reply_text(
+            "⚠️ Rotation already running."
+        )
+
+        return
+
+    rotation_task = asyncio.create_task(
+        rotation_loop()
     )
 
-@bot.on(events.NewMessage(pattern='/forcestop'))
-async def force_stop(event):
-    global is_running, rotation_task
+    await update.message.reply_text(
+        "🚀 Rotation started!\n\n"
+        f"Target ID: {target_data['target_id']}\n"
+        f"Usernames: {len(usernames)}\n"
+        f"Delay: {format_delay(delay_seconds)}"
+    )
 
-    print(f"📥 /forcestop from: {event.sender_id}")
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+# ============================================================
+# /FORCESTOP
+# ============================================================
+
+async def forcestop_command(
+    update,
+    context
+):
+
+    global rotation_task
+
+    if not await owner_only(update):
         return
 
-    if not is_running:
-        await event.reply("⚠️ Already stopped!")
-        return
+    if (
+        rotation_task
+        and not rotation_task.done()
+    ):
 
-    is_running = False
-    if rotation_task:
         rotation_task.cancel()
+
+        try:
+            await rotation_task
+        except asyncio.CancelledError:
+            pass
+
         rotation_task = None
 
-    await event.reply("⏹ **Rotation Stopped!**")
+        await update.message.reply_text(
+            "🛑 Rotation stopped."
+        )
 
-@bot.on(events.NewMessage(pattern='/change_now'))
-async def change_now(event):
-    print(f"📥 /change_now from: {event.sender_id}")
-
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
-        return
-
-    if not session_connected:
-        await event.reply("❌ Connect first: /connect")
-        return
-
-    if not usernames_list:
-        await event.reply("❌ No usernames!")
-        return
-
-    await event.reply("🔄 Changing...")
-    success = await change_username()
-
-    if success:
-        await event.reply(f"✅ Changed to @{current_username}")
     else:
-        await event.reply("❌ Failed!")
 
-@bot.on(events.NewMessage(pattern='/status'))
-async def status_command(event):
-    print(f"📥 /status from: {event.sender_id}")
+        await update.message.reply_text(
+            "ℹ️ Rotation is not running."
+        )
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+
+# ============================================================
+# /CHANGE_NOW
+# ============================================================
+
+async def change_now_command(
+    update,
+    context
+):
+
+    global current_index
+
+    if not await owner_only(update):
         return
 
-    next_username = usernames_list[current_index] if usernames_list else "None"
+    if not target_data.get(
+        "target_id"
+    ):
 
-    await event.reply(
-        f"📊 **Status**\n\n"
-        f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n"
-        f"🔐 Session: {'✅ Connected' if session_connected else '❌ Not Connected'}\n"
-        f"📛 Current: @{current_username or 'None'}\n"
-        f"📋 Total: {len(usernames_list)}\n"
-        f"⏱ Delay: {format_delay(delay_seconds)}\n"
-        f"🔄 Next: @{next_username}\n"
-        f"📍 Index: {current_index + 1}/{len(usernames_list)}"
+        await update.message.reply_text(
+            "❌ No target set!"
+        )
+
+        return
+
+    if not usernames:
+
+        await update.message.reply_text(
+            "❌ Username list is empty."
+        )
+
+        return
+
+    username = usernames[
+        current_index
+    ]
+
+    await update.message.reply_text(
+        f"🔄 Changing to @{username}..."
     )
 
-@bot.on(events.NewMessage(pattern='/list'))
-async def list_usernames(event):
-    print(f"📥 /list from: {event.sender_id}")
+    success, result = (
+        await change_username(
+            username
+        )
+    )
 
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
+    if success:
+
+        current_index = (
+            current_index + 1
+        ) % len(usernames)
+
+        await update.message.reply_text(
+            f"✅ Username changed to @{result}"
+        )
+
+    else:
+
+        await update.message.reply_text(
+            f"❌ Failed:\n{result}"
+        )
+
+
+# ============================================================
+# /STATUS
+# ============================================================
+
+async def status_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
         return
 
-    if not usernames_list:
-        await event.reply("❌ No usernames!")
+    tg = await ensure_client()
+
+    session_status = (
+        "✅ Connected"
+        if tg
+        else
+        "❌ Not connected"
+    )
+
+    running = (
+        rotation_task is not None
+        and not rotation_task.done()
+    )
+
+    target_status = (
+        "✅ Set"
+        if target_data.get("target_id")
+        else
+        "❌ Not set"
+    )
+
+    await update.message.reply_text(
+        "📊 STATUS\n\n"
+        f"Session: {session_status}\n"
+        f"Target: {target_status}\n"
+        f"Target ID: {target_data.get('target_id')}\n"
+        f"Type: {target_data.get('target_type')}\n"
+        f"Usernames: {len(usernames)}\n"
+        f"Delay: {format_delay(delay_seconds)}\n"
+        f"Rotation: "
+        f"{'🟢 Running' if running else '🔴 Stopped'}"
+    )
+
+
+# ============================================================
+# /LIST
+# ============================================================
+
+async def list_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
         return
 
-    text = f"📝 **Usernames** ({len(usernames_list)})\n\n"
-    for i, name in enumerate(usernames_list):
-        marker = "👉 " if i == current_index else "   "
-        text += f"{marker}{i+1}. @{name}\n"
+    if not usernames:
 
-    await event.reply(text)
+        await update.message.reply_text(
+            "📭 List is empty."
+        )
 
-@bot.on(events.NewMessage(pattern='/clear'))
-async def clear_usernames(event):
-    print(f"📥 /clear from: {event.sender_id}")
-
-    if event.sender_id != OWNER_ID:
-        await event.reply("❌ Unauthorized!")
         return
 
-    if is_running:
-        await event.reply("❌ Stop first: /forcestop")
+    text = "\n".join(
+        f"{i + 1}. @{name}"
+        for i, name in enumerate(
+            usernames
+        )
+    )
+
+    await update.message.reply_text(
+        "📋 USERNAME LIST\n\n"
+        + text
+    )
+
+
+# ============================================================
+# /CLEAR
+# ============================================================
+
+async def clear_command(
+    update,
+    context
+):
+
+    global usernames
+    global current_index
+
+    if not await owner_only(update):
         return
 
-    usernames_list.clear()
-    save_usernames()
-    await event.reply("🗑️ All cleared!")
+    usernames = []
 
-# ========== AUTO-CONNECT ==========
+    current_index = 0
 
-async def auto_connect():
-    global owner_session, session_connected
+    save_usernames(usernames)
 
-    saved = load_session_string()
-    if saved:
-        print("🔄 Auto-connecting session...")
+    await update.message.reply_text(
+        "🗑️ Username list cleared."
+    )
+
+
+# ============================================================
+# /CURRENT
+# ============================================================
+
+async def current_command(
+    update,
+    context
+):
+
+    if not await owner_only(update):
+        return
+
+    current_username = "Unknown"
+
+    tg = await ensure_client()
+
+    if tg and target_data.get(
+        "target_id"
+    ):
+
         try:
-            owner_session = TelegramClient(
-                StringSession(saved),
-                API_ID,
-                API_HASH
+
+            entity = await tg.get_entity(
+                target_data["target_id"]
             )
-            await owner_session.start()
-            session_connected = True
-            print("✅ Auto-connected!")
-            return True
-        except Exception as e:
-            print(f"❌ Auto-connect failed: {e}")
-            return False
-    return False
 
-# ========== MAIN ==========
+            username = getattr(
+                entity,
+                "username",
+                None
+            )
 
-async def main():
-    global usernames_list
+            if username:
 
-    print("=" * 50)
-    print("🚀 Link Changer Bot (Telethon)")
-    print("=" * 50)
+                current_username = (
+                    f"@{username}"
+                )
 
-    usernames_list = load_usernames()
-    print(f"📛 Loaded {len(usernames_list)} usernames")
+        except Exception:
+            pass
 
-    # Connect the bot HERE, inside the loop that will actually drive it.
-    await bot.start(bot_token=BOT_TOKEN)
-    print("✅ Bot started!")
-    print(f"📌 Channel: {CHANNEL_ID}")
-    print(f"⏱ Delay: {format_delay(delay_seconds)}")
-    print("=" * 50)
+    await update.message.reply_text(
+        "🎯 CURRENT TARGET\n\n"
+        f"ID: {target_data.get('target_id')}\n"
+        f"Type: {target_data.get('target_type')}\n"
+        f"Link: {target_data.get('target_link') or 'N/A'}\n"
+        f"Username: {current_username}"
+    )
 
-    await auto_connect()
 
-    print("📱 Waiting for commands...")
-    print("=" * 50)
+# ============================================================
+# ERROR HANDLER
+# ============================================================
 
-    await bot.run_until_disconnected()
+async def error_handler(
+    update,
+    context
+):
+
+    print(
+        "Bot error:",
+        context.error
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print("Starting Telegram Link Changer...")
+
+    application = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .build()
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "connect",
+            connect_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "addchannel",
+            addchannel_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "addgroup",
+            addgroup_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "addusername",
+            addusername_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "done",
+            done_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "setdelay",
+            setdelay_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "forcestart",
+            forcestart_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "forcestop",
+            forcestop_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "change_now",
+            change_now_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "status",
+            status_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "list",
+            list_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "clear",
+            clear_command
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "current",
+            current_command
+        )
+    )
+
+    application.add_error_handler(
+        error_handler
+    )
+
+    print("Bot is running...")
+
+    application.run_polling()
+
 
 if __name__ == "__main__":
-    # Use the client's OWN loop instead of asyncio.run().
-    # This is Telethon's recommended fix for:
-    # "RuntimeError: The asyncio event loop must not change after connection"
-    # It guarantees the loop the client was created with is the same
-    # loop that drives main(), so there's never a mismatch.
-    with bot:
-        bot.loop.run_until_complete(main())
+    main()
