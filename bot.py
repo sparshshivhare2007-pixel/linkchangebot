@@ -9,7 +9,7 @@ from config import *
 
 # ========== LOGGING ==========
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG mode on
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('logs/bot.log'),
@@ -86,30 +86,30 @@ def load_usernames():
 async def change_username():
     global current_index, current_username
     
-    logger.debug(f"🔄 change_username() called")
-    logger.debug(f"📛 usernames_list: {usernames_list}")
-    logger.debug(f"🔐 session_connected: {session_connected}")
+    print("🔹 [DEBUG] change_username function called")
+    print(f"🔹 [DEBUG] Usernames list: {usernames_list}")
+    print(f"🔹 [DEBUG] Session connected: {session_connected}")
     
     if not usernames_list:
-        logger.error("❌ No usernames in list!")
+        print("❌ [ERROR] No usernames in list!")
         return False
     
     if not session_connected or not owner_session:
-        logger.error("❌ Session not connected!")
+        print("❌ [ERROR] Session not connected!")
         return False
     
     try:
         username = usernames_list[current_index]
         clean_username = username.replace("@", "").strip()
         
-        logger.debug(f"📛 Changing to: @{clean_username}")
+        print(f"🔹 [DEBUG] Changing to: @{clean_username}")
         
         await owner_session.set_channel_username(CHANNEL_ID, clean_username)
         
         current_username = clean_username
         current_index = (current_index + 1) % len(usernames_list)
         
-        logger.info(f"✅ Username changed to: @{clean_username}")
+        print(f"✅ [SUCCESS] Username changed to: @{clean_username}")
         
         await bot.send_message(
             OWNER_ID,
@@ -123,7 +123,7 @@ async def change_username():
         return True
         
     except Exception as e:
-        logger.error(f"❌ Error changing username: {e}")
+        print(f"❌ [ERROR] Error changing username: {e}")
         await bot.send_message(OWNER_ID, f"❌ **Error!**\n\n{str(e)}")
         return False
 
@@ -132,35 +132,35 @@ async def change_username():
 async def rotation_loop():
     global is_running
     
-    logger.info("🔄 Rotation loop started!")
+    print("🔄 [INFO] Rotation loop started!")
     
     while is_running:
         try:
             success = await change_username()
             if success:
-                logger.info(f"⏳ Waiting {format_delay(delay_seconds)}...")
+                print(f"⏳ [INFO] Waiting {format_delay(delay_seconds)}...")
                 await asyncio.sleep(delay_seconds)
             else:
-                logger.warning("⚠️ Failed, retrying in 5 minutes...")
+                print("⚠️ [WARNING] Failed, retrying in 5 minutes...")
                 await asyncio.sleep(300)
         except Exception as e:
-            logger.error(f"❌ Rotation loop error: {e}")
+            print(f"❌ [ERROR] Rotation loop error: {e}")
             await asyncio.sleep(60)
 
 # ========== BOT COMMANDS ==========
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message: Message):
-    logger.debug(f"📥 /start command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /start received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized access from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized access from: {message.from_user.id}")
         await message.reply("❌ You are not authorized!")
         return
     
     status_text = "✅ Connected" if session_connected else "❌ Not Connected"
     
-    logger.info(f"✅ /start response sent to: {message.from_user.id}")
+    print(f"✅ [SUCCESS] /start response sent to: {message.from_user.id}")
     
     await message.reply(
         f"🤖 **Link Changer Bot**\n\n"
@@ -186,27 +186,27 @@ async def start_command(client, message: Message):
 async def connect_session(client, message: Message):
     global owner_session, session_connected
     
-    logger.debug(f"📥 /connect command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /connect received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /connect from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /connect from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if session_connected:
-        logger.info(f"ℹ️ Session already connected")
+        print(f"ℹ️ [INFO] Session already connected")
         await message.reply("✅ Session already connected!")
         return
     
     try:
-        logger.info(f"🔄 Attempting to connect session from: {SESSION_PATH}")
+        print(f"🔄 [INFO] Attempting to connect session from: {SESSION_PATH}")
         await message.reply("🔄 Connecting to session...")
         
         owner_session = Client(SESSION_PATH, api_id=API_ID, api_hash=API_HASH)
         await owner_session.start()
         
         session_connected = True
-        logger.info(f"✅ Owner session connected successfully!")
+        print(f"✅ [SUCCESS] Owner session connected successfully!")
         
         await message.reply(
             f"✅ **Session Connected!**\n\n"
@@ -217,25 +217,25 @@ async def connect_session(client, message: Message):
         )
         
     except Exception as e:
-        logger.error(f"❌ Session connection error: {e}")
+        print(f"❌ [ERROR] Session connection error: {e}")
         await message.reply(f"❌ **Failed to connect!**\n\n{str(e)}\n\nMake sure session file exists at: {SESSION_PATH}")
 
 @bot.on_message(filters.command("addusername"))
 async def add_username(client, message: Message):
-    logger.debug(f"📥 /addusername command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /addusername received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /addusername from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /addusername from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not session_connected:
-        logger.warning(f"⚠️ Session not connected")
+        print(f"❌ [ERROR] Session not connected")
         await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if len(message.command) < 2:
-        logger.debug(f"ℹ️ No usernames provided")
+        print(f"ℹ️ [INFO] No usernames provided")
         await message.reply(
             "❌ **Usage:** /addusername @name1, @name2, @name3\n\n"
             "Examples:\n"
@@ -245,14 +245,14 @@ async def add_username(client, message: Message):
         return
     
     text = ' '.join(message.command[1:])
-    logger.debug(f"📝 Raw text: {text}")
+    print(f"📝 [DEBUG] Raw text: {text}")
     
     if ',' in text:
         new_usernames = [name.strip() for name in text.split(',') if name.strip()]
     else:
         new_usernames = [name.strip() for name in text.split() if name.strip()]
     
-    logger.debug(f"📛 Parsed usernames: {new_usernames}")
+    print(f"📛 [DEBUG] Parsed usernames: {new_usernames}")
     
     cleaned = []
     for name in new_usernames:
@@ -261,14 +261,14 @@ async def add_username(client, message: Message):
             cleaned.append(clean)
     
     if not cleaned:
-        logger.warning(f"⚠️ No valid usernames found")
+        print(f"❌ [ERROR] No valid usernames found")
         await message.reply("❌ No valid usernames found!")
         return
     
     usernames_list.extend(cleaned)
     save_usernames()
     
-    logger.info(f"✅ Added {len(cleaned)} usernames. Total: {len(usernames_list)}")
+    print(f"✅ [SUCCESS] Added {len(cleaned)} usernames. Total: {len(usernames_list)}")
     
     await message.reply(
         f"✅ Added {len(cleaned)} username(s)!\n\n"
@@ -279,20 +279,20 @@ async def add_username(client, message: Message):
 
 @bot.on_message(filters.command("done"))
 async def done_command(client, message: Message):
-    logger.debug(f"📥 /done command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /done received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /done from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /done from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not usernames_list:
-        logger.warning(f"⚠️ No usernames to save")
+        print(f"❌ [ERROR] No usernames to save")
         await message.reply("❌ No usernames added! Use /addusername first.")
         return
     
     save_usernames()
-    logger.info(f"✅ Saved {len(usernames_list)} usernames")
+    print(f"✅ [SUCCESS] Saved {len(usernames_list)} usernames")
     
     response = f"✅ **Done!** {len(usernames_list)} usernames saved.\n\n"
     response += f"📛 Usernames:\n"
@@ -307,15 +307,15 @@ async def done_command(client, message: Message):
 
 @bot.on_message(filters.command("setdelay"))
 async def set_delay(client, message: Message):
-    logger.debug(f"📥 /setdelay command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /setdelay received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /setdelay from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /setdelay from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if len(message.command) < 2:
-        logger.debug(f"ℹ️ No delay provided")
+        print(f"ℹ️ [INFO] No delay provided")
         await message.reply(
             "❌ **Usage:** /setdelay <time>\n\n"
             "**Examples:**\n"
@@ -329,7 +329,7 @@ async def set_delay(client, message: Message):
     delay_str = ' '.join(message.command[1:])
     delay_seconds = parse_delay(delay_str)
     
-    logger.info(f"✅ Delay set to: {format_delay(delay_seconds)} ({delay_seconds} seconds)")
+    print(f"✅ [SUCCESS] Delay set to: {format_delay(delay_seconds)} ({delay_seconds} seconds)")
     
     await message.reply(
         f"✅ **Delay set!**\n\n"
@@ -341,32 +341,32 @@ async def set_delay(client, message: Message):
 async def force_start(client, message: Message):
     global is_running, rotation_task
     
-    logger.debug(f"📥 /forcestart command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /forcestart received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /forcestart from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /forcestart from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not session_connected:
-        logger.warning(f"⚠️ Session not connected")
+        print(f"❌ [ERROR] Session not connected")
         await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if is_running:
-        logger.info(f"ℹ️ Rotation already running")
+        print(f"ℹ️ [INFO] Rotation already running")
         await message.reply("⚠️ Rotation already running!")
         return
     
     if not usernames_list:
-        logger.warning(f"⚠️ No usernames")
+        print(f"❌ [ERROR] No usernames")
         await message.reply("❌ No usernames! Add first: /addusername")
         return
     
     is_running = True
     rotation_task = asyncio.create_task(rotation_loop())
     
-    logger.info(f"🚀 Rotation started with {len(usernames_list)} usernames, delay: {format_delay(delay_seconds)}")
+    print(f"✅ [SUCCESS] Rotation started with {len(usernames_list)} usernames, delay: {format_delay(delay_seconds)}")
     
     await message.reply(
         f"🚀 **Rotation Started!**\n\n"
@@ -381,15 +381,15 @@ async def force_start(client, message: Message):
 async def force_stop(client, message: Message):
     global is_running, rotation_task
     
-    logger.debug(f"📥 /forcestop command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /forcestop received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /forcestop from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /forcestop from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not is_running:
-        logger.info(f"ℹ️ Rotation already stopped")
+        print(f"ℹ️ [INFO] Rotation already stopped")
         await message.reply("⚠️ Rotation already stopped!")
         return
     
@@ -399,26 +399,26 @@ async def force_stop(client, message: Message):
         rotation_task.cancel()
         rotation_task = None
     
-    logger.info(f"⏹ Rotation stopped")
+    print(f"✅ [SUCCESS] Rotation stopped")
     
     await message.reply("⏹ **Rotation Stopped!**")
 
 @bot.on_message(filters.command("change_now"))
 async def change_now(client, message: Message):
-    logger.debug(f"📥 /change_now command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /change_now received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /change_now from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /change_now from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not session_connected:
-        logger.warning(f"⚠️ Session not connected")
+        print(f"❌ [ERROR] Session not connected")
         await message.reply("❌ Session not connected! Use /connect first.")
         return
     
     if not usernames_list:
-        logger.warning(f"⚠️ No usernames")
+        print(f"❌ [ERROR] No usernames")
         await message.reply("❌ No usernames!")
         return
     
@@ -432,17 +432,17 @@ async def change_now(client, message: Message):
 
 @bot.on_message(filters.command("status"))
 async def status_command(client, message: Message):
-    logger.debug(f"📥 /status command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /status received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /status from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /status from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     next_username = usernames_list[current_index] if usernames_list else "None"
     status_text = "✅ Connected" if session_connected else "❌ Not Connected"
     
-    logger.info(f"📊 Status requested by: {message.from_user.id}")
+    print(f"✅ [SUCCESS] Status response sent to: {message.from_user.id}")
     
     await message.reply(
         f"📊 **Bot Status**\n\n"
@@ -458,15 +458,15 @@ async def status_command(client, message: Message):
 
 @bot.on_message(filters.command("list"))
 async def list_usernames(client, message: Message):
-    logger.debug(f"📥 /list command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /list received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /list from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /list from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if not usernames_list:
-        logger.warning(f"⚠️ No usernames to list")
+        print(f"❌ [ERROR] No usernames to list")
         await message.reply("❌ No usernames!")
         return
     
@@ -480,27 +480,27 @@ async def list_usernames(client, message: Message):
             text += "\n... and more"
             break
     
-    logger.info(f"📋 Listed {len(usernames_list)} usernames")
+    print(f"✅ [SUCCESS] Listed {len(usernames_list)} usernames")
     await message.reply(text)
 
 @bot.on_message(filters.command("clear"))
 async def clear_usernames(client, message: Message):
-    logger.debug(f"📥 /clear command received from: {message.from_user.id}")
+    print(f"📥 [COMMAND] /clear received from: {message.from_user.id}")
     
     if message.from_user.id != OWNER_ID:
-        logger.warning(f"⚠️ Unauthorized /clear from: {message.from_user.id}")
+        print(f"❌ [AUTH] Unauthorized /clear from: {message.from_user.id}")
         await message.reply("❌ Unauthorized!")
         return
     
     if is_running:
-        logger.warning(f"⚠️ Cannot clear while running")
+        print(f"❌ [ERROR] Cannot clear while running")
         await message.reply("❌ Stop rotation first: /forcestop")
         return
     
     usernames_list.clear()
     save_usernames()
     
-    logger.info(f"🗑️ All usernames cleared")
+    print(f"✅ [SUCCESS] All usernames cleared")
     await message.reply("🗑️ All usernames cleared!")
 
 # ========== MAIN ==========
@@ -508,18 +508,21 @@ async def clear_usernames(client, message: Message):
 async def main():
     global usernames_list
     
-    logger.info("🚀 Starting Link Changer Bot...")
-    logger.info("🐛 DEBUG MODE ENABLED - All commands will be logged")
+    print("=" * 50)
+    print("🚀 Starting Link Changer Bot...")
+    print("🐛 DEBUG MODE ENABLED - All commands will be printed")
+    print("=" * 50)
     
     usernames_list = load_usernames()
-    logger.info(f"📛 Loaded {len(usernames_list)} usernames")
+    print(f"📛 Loaded {len(usernames_list)} usernames")
     
     await bot.start()
-    logger.info("✅ Bot started! Use /connect to connect session.")
-    logger.info(f"📌 Channel: {CHANNEL_ID}")
-    logger.info(f"⏱ Default Delay: {format_delay(delay_seconds)}")
-    
-    logger.info("📱 Waiting for commands...")
+    print("✅ Bot started! Use /connect to connect session.")
+    print(f"📌 Channel: {CHANNEL_ID}")
+    print(f"⏱ Default Delay: {format_delay(delay_seconds)}")
+    print("=" * 50)
+    print("📱 Waiting for commands...")
+    print("=" * 50)
     
     await asyncio.Event().wait()
 
