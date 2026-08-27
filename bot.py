@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import json
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -30,6 +31,25 @@ current_username = None
 rotation_task = None
 owner_session = None
 session_connected = False
+session_string = None
+
+# ========== SESSION STORAGE ==========
+SESSION_FILE = "session_data.json"
+
+def save_session_string(sess_str):
+    """Save session string to file"""
+    with open(SESSION_FILE, "w") as f:
+        json.dump({"session_string": sess_str}, f)
+    print(f"✅ [INFO] Session string saved to {SESSION_FILE}")
+
+def load_session_string():
+    """Load session string from file"""
+    try:
+        with open(SESSION_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("session_string")
+    except:
+        return None
 
 # ========== HELPER FUNCTIONS ==========
 
@@ -170,7 +190,7 @@ async def start_command(client, message: Message):
         f"🔄 Status: {'✅ Running' if is_running else '⏹ Stopped'}\n"
         f"🔐 Session: {status_text}\n\n"
         f"**Commands:**\n"
-        f"/connect - Connect owner session\n"
+        f"/connect <session_string> - Connect with session string\n"
         f"/addusername @name1, @name2 - Bulk add\n"
         f"/done - Finish adding\n"
         f"/setdelay 20min - Set delay\n"
@@ -184,7 +204,7 @@ async def start_command(client, message: Message):
 
 @bot.on_message(filters.command("connect"))
 async def connect_session(client, message: Message):
-    global owner_session, session_connected
+    global owner_session, session_connected, session_string
     
     print(f"📥 [COMMAND] /connect received from: {message.from_user.id}")
     
@@ -198,11 +218,37 @@ async def connect_session(client, message: Message):
         await message.reply("✅ Session already connected!")
         return
     
+    # Check if session string provided in command
+    if len(message.command) < 2:
+        # Try to load from file
+        saved_session = load_session_string()
+        if saved_session:
+            session_string = saved_session
+            print(f"ℹ️ [INFO] Loading saved session string from file")
+            await message.reply("🔄 Loading saved session...")
+        else:
+            await message.reply(
+                "❌ **No session string found!**\n\n"
+                "Usage: `/connect <session_string>`\n\n"
+                "Or first save session using session generator bot."
+            )
+            return
+    else:
+        session_string = message.command[1]
+        # Save session string to file
+        save_session_string(session_string)
+        print(f"✅ [INFO] New session string received and saved")
+        await message.reply("🔄 Connecting with new session...")
+    
     try:
-        print(f"🔄 [INFO] Attempting to connect session from: {SESSION_PATH}")
-        await message.reply("🔄 Connecting to session...")
+        print(f"🔄 [INFO] Attempting to connect with session string")
         
-        owner_session = Client(SESSION_PATH, api_id=API_ID, api_hash=API_HASH)
+        owner_session = Client(
+            "owner_session",
+            api_id=API_ID,
+            api_hash=API_HASH,
+            session_string=session_string
+        )
         await owner_session.start()
         
         session_connected = True
@@ -210,15 +256,17 @@ async def connect_session(client, message: Message):
         
         await message.reply(
             f"✅ **Session Connected!**\n\n"
-            f"📁 Session: {SESSION_PATH}\n"
-            f"🔐 Status: Active\n\n"
+            f"🔐 Status: Active\n"
+            f"📌 Channel: {CHANNEL_ID}\n\n"
             f"Now you can add usernames:\n"
             f"/addusername @name1, @name2, @name3"
         )
         
     except Exception as e:
         print(f"❌ [ERROR] Session connection error: {e}")
-        await message.reply(f"❌ **Failed to connect!**\n\n{str(e)}\n\nMake sure session file exists at: {SESSION_PATH}")
+        session_connected = False
+        session_string = None
+        await message.reply(f"❌ **Failed to connect!**\n\n{str(e)}\n\nMake sure session string is valid.")
 
 @bot.on_message(filters.command("addusername"))
 async def add_username(client, message: Message):
@@ -503,6 +551,32 @@ async def clear_usernames(client, message: Message):
     print(f"✅ [SUCCESS] All usernames cleared")
     await message.reply("🗑️ All usernames cleared!")
 
+# ========== AUTO-CONNECT ON START ==========
+
+async def auto_connect_session():
+    global owner_session, session_connected, session_string
+    
+    saved_session = load_session_string()
+    if saved_session:
+        print("🔄 [INFO] Auto-connecting saved session...")
+        try:
+            session_string = saved_session
+            owner_session = Client(
+                "owner_session",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                session_string=session_string
+            )
+            await owner_session.start()
+            session_connected = True
+            print("✅ [SUCCESS] Auto-connected session successfully!")
+            return True
+        except Exception as e:
+            print(f"❌ [ERROR] Auto-connect failed: {e}")
+            session_connected = False
+            return False
+    return False
+
 # ========== MAIN ==========
 
 async def main():
@@ -517,10 +591,14 @@ async def main():
     print(f"📛 Loaded {len(usernames_list)} usernames")
     
     await bot.start()
-    print("✅ Bot started! Use /connect to connect session.")
+    print("✅ Bot started! Bot is alive!")
     print(f"📌 Channel: {CHANNEL_ID}")
     print(f"⏱ Default Delay: {format_delay(delay_seconds)}")
     print("=" * 50)
+    
+    # Auto-connect saved session
+    await auto_connect_session()
+    
     print("📱 Waiting for commands...")
     print("=" * 50)
     
