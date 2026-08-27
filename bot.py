@@ -23,6 +23,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
+from telegram.error import RetryAfter
 
 import config
 
@@ -40,7 +41,6 @@ class UserManager:
     
     def load_data(self):
         """Load all data from JSON files"""
-        # Load users
         if not os.path.exists(self.users_file):
             self.users = {}
             self.save_users()
@@ -51,7 +51,6 @@ class UserManager:
             except:
                 self.users = {}
         
-        # Load pending payments
         if not os.path.exists(self.pending_file):
             self.pending = {}
             self.save_pending()
@@ -62,7 +61,6 @@ class UserManager:
             except:
                 self.pending = {}
         
-        # Load sudo users
         if not os.path.exists(self.sudo_file):
             self.sudo_users = []
             self.save_sudo()
@@ -74,47 +72,36 @@ class UserManager:
                 self.sudo_users = []
     
     def save_users(self):
-        """Save user data to JSON file"""
         with open(self.users_file, "w", encoding="utf-8") as f:
             json.dump(self.users, f, indent=4)
     
     def save_pending(self):
-        """Save pending payments to JSON file"""
         with open(self.pending_file, "w", encoding="utf-8") as f:
             json.dump(self.pending, f, indent=4)
     
     def save_sudo(self):
-        """Save sudo users to JSON file"""
         with open(self.sudo_file, "w", encoding="utf-8") as f:
             json.dump(self.sudo_users, f, indent=4)
     
     def is_owner(self, user_id: int) -> bool:
-        """Check if user is the owner"""
         return user_id == config.OWNER_ID
     
     def is_sudo(self, user_id: int) -> bool:
-        """Check if user is a sudo user"""
         return str(user_id) in self.sudo_users
     
     def is_registered(self, user_id: int) -> bool:
-        """Check if user is registered"""
         return str(user_id) in self.users
     
     def is_active(self, user_id: int) -> bool:
-        """Check if user's subscription is active"""
         if not self.is_registered(user_id):
             return False
-        
-        # Sudo users are always active
         if self.is_sudo(user_id):
             return True
-        
         user_data = self.users[str(user_id)]
         expiry = user_data.get("expiry", 0)
         return time.time() < expiry
     
     def register_user(self, user_id: int, username: str = None, first_name: str = None):
-        """Register a new user"""
         user_id_str = str(user_id)
         if user_id_str not in self.users:
             self.users[user_id_str] = {
@@ -129,7 +116,6 @@ class UserManager:
             self.save_users()
     
     def activate_user(self, user_id: int, plan_days: int):
-        """Activate user subscription"""
         user_id_str = str(user_id)
         if user_id_str in self.users:
             current_expiry = self.users[user_id_str].get("expiry", 0)
@@ -142,13 +128,10 @@ class UserManager:
         return False
     
     def add_sudo_user(self, user_id: int) -> bool:
-        """Add a user as sudo (unlimited access)"""
         user_id_str = str(user_id)
         if user_id_str not in self.sudo_users:
             self.sudo_users.append(user_id_str)
             self.save_sudo()
-            
-            # Update user data
             if user_id_str in self.users:
                 self.users[user_id_str]["is_sudo"] = True
                 self.users[user_id_str]["plan"] = "Sudo Unlimited"
@@ -159,13 +142,10 @@ class UserManager:
         return False
     
     def remove_sudo_user(self, user_id: int) -> bool:
-        """Remove a user from sudo"""
         user_id_str = str(user_id)
         if user_id_str in self.sudo_users:
             self.sudo_users.remove(user_id_str)
             self.save_sudo()
-            
-            # Update user data
             if user_id_str in self.users:
                 self.users[user_id_str]["is_sudo"] = False
                 self.users[user_id_str]["plan"] = None
@@ -174,14 +154,11 @@ class UserManager:
         return False
     
     def get_sudo_users(self) -> List[str]:
-        """Get list of sudo user IDs"""
         return self.sudo_users
     
     def add_pending_payment(self, user_id: int, plan_days: int, username: str = None):
-        """Add a pending payment request"""
         user_id_str = str(user_id)
         payment_id = f"pay_{int(time.time())}_{user_id_str}"
-        
         self.pending[payment_id] = {
             "user_id": user_id_str,
             "username": username,
@@ -195,21 +172,15 @@ class UserManager:
         return payment_id
     
     def get_pending_payments(self):
-        """Get all pending payments"""
         return {k: v for k, v in self.pending.items() if v.get("status") == "pending"}
     
     def approve_payment(self, payment_id: str):
-        """Approve a payment and activate user"""
         if payment_id in self.pending:
             payment = self.pending[payment_id]
             if payment.get("status") == "pending":
                 user_id = int(payment["user_id"])
                 plan_days = payment["plan_days"]
-                
-                # Activate user
                 self.activate_user(user_id, plan_days)
-                
-                # Mark payment as approved
                 self.pending[payment_id]["status"] = "approved"
                 self.pending[payment_id]["approved_at"] = time.time()
                 self.save_pending()
@@ -217,7 +188,6 @@ class UserManager:
         return False
     
     def reject_payment(self, payment_id: str):
-        """Reject a payment"""
         if payment_id in self.pending:
             self.pending[payment_id]["status"] = "rejected"
             self.save_pending()
@@ -225,26 +195,22 @@ class UserManager:
         return False
     
     def get_plan_price(self, plan_days: int) -> float:
-        """Get price for a plan in INR"""
         prices = {
-            7: 150.0,    # ₹150 for 7 days
-            14: 260.0,   # ₹260 for 14 days
-            30: 500.0,   # ₹500 for 30 days
-            -1: 900.0    # ₹900 for Unlimited
+            7: 150.0,
+            14: 260.0,
+            30: 500.0,
+            -1: 900.0
         }
         return prices.get(plan_days, 0)
     
     def get_plan_name(self, plan_days: int) -> str:
-        """Get plan name"""
         if plan_days == -1:
             return "Unlimited Plan"
         return f"{plan_days} Days Plan"
     
     def get_remaining_time(self, user_id: int) -> int:
-        """Get remaining time in seconds"""
         if self.is_sudo(user_id):
-            return -1  # Unlimited
-        
+            return -1
         if not self.is_registered(user_id):
             return 0
         user_data = self.users[str(user_id)]
@@ -253,18 +219,14 @@ class UserManager:
         return int(remaining)
     
     def format_remaining_time(self, user_id: int) -> str:
-        """Format remaining time in human readable format"""
         if self.is_sudo(user_id):
             return "♾️ Unlimited"
-        
         remaining = self.get_remaining_time(user_id)
         if remaining <= 0:
             return "Expired"
-        
         days = remaining // 86400
         hours = (remaining % 86400) // 3600
         minutes = (remaining % 3600) // 60
-        
         parts = []
         if days > 0:
             parts.append(f"{days}d")
@@ -272,7 +234,6 @@ class UserManager:
             parts.append(f"{hours}h")
         if minutes > 0:
             parts.append(f"{minutes}m")
-        
         return " ".join(parts) if parts else "0m"
 
 
@@ -281,7 +242,6 @@ class UserManager:
 # ============================================================
 
 def format_header(title: str, emoji: str = "🤖") -> str:
-    """Create a formatted header with emoji and border."""
     border = "═" * 38
     return f"""
 ┌{border}┐
@@ -291,7 +251,6 @@ def format_header(title: str, emoji: str = "🤖") -> str:
 
 
 def format_success(message: str) -> str:
-    """Format a success message."""
     return f"""
 ┌─ ✅ SUCCESS
 │
@@ -300,7 +259,6 @@ def format_success(message: str) -> str:
 
 
 def format_error(message: str) -> str:
-    """Format an error message."""
     return f"""
 ┌─ ❌ ERROR
 │
@@ -309,7 +267,6 @@ def format_error(message: str) -> str:
 
 
 def format_info(message: str) -> str:
-    """Format an info message."""
     return f"""
 ┌─ ℹ️ INFO
 │
@@ -318,12 +275,10 @@ def format_info(message: str) -> str:
 
 
 def format_delay(seconds: int) -> str:
-    """Format delay in human-readable form."""
     hours = seconds // 3600
     seconds %= 3600
     minutes = seconds // 60
     seconds %= 60
-
     parts = []
     if hours:
         parts.append(f"{hours}h")
@@ -331,20 +286,59 @@ def format_delay(seconds: int) -> str:
         parts.append(f"{minutes}m")
     if seconds:
         parts.append(f"{seconds}s")
-
     return " ".join(parts) if parts else "0s"
 
 
 # ============================================================
-# ANIMATION HELPERS
+# ANIMATION HELPERS WITH FLOOD CONTROL
 # ============================================================
+
+async def safe_edit_message(message, text, reply_markup=None, max_retries=3):
+    """Safely edit message with retry on flood error"""
+    for attempt in range(max_retries):
+        try:
+            if reply_markup:
+                await message.edit_text(text=text, reply_markup=reply_markup)
+            else:
+                await message.edit_text(text=text)
+            return True
+        except RetryAfter as e:
+            wait_time = e.retry_after
+            print(f"Flood control: waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time + 1)
+        except Exception as e:
+            print(f"Edit error: {e}")
+            if attempt == max_retries - 1:
+                return False
+            await asyncio.sleep(1)
+    return False
+
+
+async def safe_reply_text(update, text, reply_markup=None, max_retries=3):
+    """Safely reply with retry on flood error"""
+    for attempt in range(max_retries):
+        try:
+            if reply_markup:
+                return await update.message.reply_text(text=text, reply_markup=reply_markup)
+            else:
+                return await update.message.reply_text(text=text)
+        except RetryAfter as e:
+            wait_time = e.retry_after
+            print(f"Flood control: waiting {wait_time} seconds...")
+            await asyncio.sleep(wait_time + 1)
+        except Exception as e:
+            print(f"Reply error: {e}")
+            if attempt == max_retries - 1:
+                return None
+            await asyncio.sleep(1)
+    return None
+
 
 async def animate_initialization(update, context, user_manager):
     """Create an animated initialization sequence for non-owners."""
     
     init_text = "𝒾𝓃𝒾𝓉𝒾𝒶𝓁𝒾𝓏𝒾𝓃𝑔"
     
-    # Create welcome message for public
     welcome_template = f"""
 ╔═══════════════════════════════════════════╗
 ║                                           ║
@@ -371,7 +365,6 @@ async def animate_initialization(update, context, user_manager):
 
 💡 Click the buttons below to get started!"""
 
-    # Create inline keyboard for public
     keyboard = [
         [
             InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan"),
@@ -384,47 +377,34 @@ async def animate_initialization(update, context, user_manager):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Split the template
     parts = welcome_template.split(init_text)
-    
-    # Initial message
     initial_message = parts[0] + " " * len(init_text) + parts[1]
-    message = await update.message.reply_text(
-        text=initial_message,
-        reply_markup=reply_markup
-    )
     
-    # Animate initialization text
+    # Send initial message safely
+    message = await safe_reply_text(update, initial_message, reply_markup)
+    if not message:
+        return
+    
+    # Animate character by character with flood control
     for i in range(1, len(init_text) + 1):
         animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
-        await message.edit_text(
-            text=animated_text,
-            reply_markup=reply_markup
-        )
-        await asyncio.sleep(0.12)
+        success = await safe_edit_message(message, animated_text, reply_markup)
+        if not success:
+            break
+        await asyncio.sleep(0.15)
     
     # Glow effect
     for _ in range(3):
         glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
-        await message.edit_text(
-            text=glow_text,
-            reply_markup=reply_markup
-        )
+        await safe_edit_message(message, glow_text, reply_markup)
         await asyncio.sleep(0.2)
         
         normal_text = parts[0] + init_text + parts[1]
-        await message.edit_text(
-            text=normal_text,
-            reply_markup=reply_markup
-        )
+        await safe_edit_message(message, normal_text, reply_markup)
         await asyncio.sleep(0.2)
     
-    # Final message
     final_message = welcome_template.replace(init_text, f"🔒 {init_text} 🔒")
-    await message.edit_text(
-        text=final_message,
-        reply_markup=reply_markup
-    )
+    await safe_edit_message(message, final_message, reply_markup)
 
 
 async def animate_owner_start(update, context, user_manager):
@@ -432,7 +412,6 @@ async def animate_owner_start(update, context, user_manager):
     
     init_text = "𝒾𝓃𝒾𝓉𝒾𝒶𝓁𝒾𝓏𝒾𝓃𝑔"
     
-    # Create owner welcome message
     welcome_template = f"""
 ╔═══════════════════════════════════════════╗
 ║                                           ║
@@ -488,7 +467,6 @@ async def animate_owner_start(update, context, user_manager):
 
 💡 Use buttons below for quick access!"""
 
-    # Create owner keyboard
     keyboard = [
         [
             InlineKeyboardButton("📊 Status", callback_data="status"),
@@ -512,55 +490,39 @@ async def animate_owner_start(update, context, user_manager):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Split the template
     parts = welcome_template.split(init_text)
-    
-    # Initial message
     initial_message = parts[0] + " " * len(init_text) + parts[1]
-    message = await update.message.reply_text(
-        text=initial_message,
-        reply_markup=reply_markup
-    )
     
-    # Animate initialization text
+    message = await safe_reply_text(update, initial_message, reply_markup)
+    if not message:
+        return
+    
     for i in range(1, len(init_text) + 1):
         animated_text = parts[0] + init_text[:i] + " " * (len(init_text) - i) + parts[1]
-        await message.edit_text(
-            text=animated_text,
-            reply_markup=reply_markup
-        )
-        await asyncio.sleep(0.12)
+        success = await safe_edit_message(message, animated_text, reply_markup)
+        if not success:
+            break
+        await asyncio.sleep(0.15)
     
-    # Glow effect
     for _ in range(3):
         glow_text = parts[0] + f"✨{init_text}✨" + parts[1]
-        await message.edit_text(
-            text=glow_text,
-            reply_markup=reply_markup
-        )
+        await safe_edit_message(message, glow_text, reply_markup)
         await asyncio.sleep(0.2)
-        
         normal_text = parts[0] + init_text + parts[1]
-        await message.edit_text(
-            text=normal_text,
-            reply_markup=reply_markup
-        )
+        await safe_edit_message(message, normal_text, reply_markup)
         await asyncio.sleep(0.2)
     
-    # Final message
     final_message = welcome_template.replace(init_text, f"✅ {init_text} ✅")
-    await message.edit_text(
-        text=final_message,
-        reply_markup=reply_markup
-    )
+    await safe_edit_message(message, final_message, reply_markup)
 
 
 # ============================================================
-# PAYMENT HANDLERS WITH LOGGER GROUP
+# PAYMENT HANDLERS
 # ============================================================
 
 async def show_plans(update, context):
     """Show available plans with prices."""
+    query = update.callback_query
     keyboard = [
         [
             InlineKeyboardButton("📅 7 Days - ₹150", callback_data="plan_7"),
@@ -576,8 +538,9 @@ async def show_plans(update, context):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.message.edit_text(
-        f"""{format_header("💳 Choose Your Plan", "💳")}
+    try:
+        await query.message.edit_text(
+            f"""{format_header("💳 Choose Your Plan", "💳")}
 
 ┌─ 📋 PLANS
 │
@@ -612,8 +575,10 @@ async def show_plans(update, context):
 └─
 
 💳 Select a plan to proceed with payment.""",
-        reply_markup=reply_markup
-    )
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"Error showing plans: {e}")
 
 
 async def show_payment(update, context, plan_days):
@@ -622,15 +587,12 @@ async def show_payment(update, context, plan_days):
     user_id = query.from_user.id
     username = query.from_user.username or query.from_user.first_name
     
-    # Add pending payment
     user_manager = context.bot_data.get('user_manager')
     payment_id = user_manager.add_pending_payment(user_id, plan_days, username)
     
-    # Get plan price and name
     amount = user_manager.get_plan_price(plan_days)
     plan_name = user_manager.get_plan_name(plan_days)
     
-    # QR Code path (from root directory)
     qr_path = "qr.jpg"
     qr_exists = os.path.exists(qr_path)
     
@@ -664,21 +626,24 @@ async def show_payment(update, context, plan_days):
 ⏳ Waiting for payment verification...
 Owner will approve your payment shortly."""
     
-    if qr_exists:
-        with open(qr_path, "rb") as f:
-            await query.message.reply_photo(
-                photo=f,
-                caption=message_text,
-                reply_markup=reply_markup
-            )
-            await query.message.delete()
-    else:
-        await query.message.edit_text(
-            f"""{message_text}
+    try:
+        if qr_exists:
+            with open(qr_path, "rb") as f:
+                await query.message.reply_photo(
+                    photo=f,
+                    caption=message_text,
+                    reply_markup=reply_markup
+                )
+                await query.message.delete()
+        else:
+            await query.message.edit_text(
+                f"""{message_text}
 
 ⚠️ QR code not found. Please contact owner for payment details.""",
-            reply_markup=reply_markup
-        )
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        print(f"Error showing payment: {e}")
 
 
 async def send_to_logger_group(context, text, photo_path=None):
@@ -703,7 +668,11 @@ async def send_to_logger_group(context, text, photo_path=None):
 async def handle_payment_callback(update, context):
     """Handle payment-related callbacks."""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()
+    except Exception:
+        pass
     
     user_manager = context.bot_data.get('user_manager')
     data = query.data
@@ -721,11 +690,9 @@ async def handle_payment_callback(update, context):
     elif data.startswith("paid_"):
         payment_id = data.split("_")[1]
         
-        # Check if payment exists
         if payment_id in user_manager.pending:
             payment = user_manager.pending[payment_id]
             if payment.get("status") == "pending":
-                # Send notification to logger group with QR
                 qr_path = "qr.jpg"
                 
                 logger_text = f"""
@@ -747,9 +714,9 @@ async def handle_payment_callback(update, context):
                 
                 await send_to_logger_group(context, logger_text, qr_path)
                 
-                # Update user message
-                await query.message.edit_text(
-                    f"""{format_info("✅ Payment Submitted!")}
+                try:
+                    await query.message.edit_text(
+                        f"""{format_info("✅ Payment Submitted!")}
 
 ┌─ 📤 NOTIFICATION SENT
 │
@@ -761,9 +728,9 @@ async def handle_payment_callback(update, context):
 
 📢 You will be notified when owner approves your payment.
 ⏱️ This usually takes a few minutes."""
-                )
-                
-                return
+                    )
+                except Exception:
+                    pass
     
     elif data.startswith("refresh_"):
         payment_id = data.split("_")[1]
@@ -771,9 +738,10 @@ async def handle_payment_callback(update, context):
             payment = user_manager.pending[payment_id]
             status = payment.get("status", "pending")
             
-            if status == "approved":
-                await query.message.edit_text(
-                    f"""{format_success("🎉 Payment Approved!")}
+            try:
+                if status == "approved":
+                    await query.message.edit_text(
+                        f"""{format_success("🎉 Payment Approved!")}
 
 ┌─ ✅ ACCESS GRANTED
 │
@@ -784,10 +752,10 @@ async def handle_payment_callback(update, context):
 └─
 
 🎊 Welcome aboard!"""
-                )
-            elif status == "rejected":
-                await query.message.edit_text(
-                    f"""{format_error("❌ Payment Rejected")}
+                    )
+                elif status == "rejected":
+                    await query.message.edit_text(
+                        f"""{format_error("❌ Payment Rejected")}
 
 ┌─ ❌ PAYMENT FAILED
 │
@@ -798,10 +766,10 @@ async def handle_payment_callback(update, context):
 └─
 
 💡 Contact @owner for help."""
-                )
-            else:
-                await query.message.edit_text(
-                    f"""{format_info("⏳ Still Waiting")}
+                    )
+                else:
+                    await query.message.edit_text(
+                        f"""{format_info("⏳ Still Waiting")}
 
 ┌─ ⏳ PENDING
 │
@@ -812,7 +780,9 @@ async def handle_payment_callback(update, context):
 └─
 
 ⏱️ Please wait for owner to verify your payment."""
-                )
+                    )
+            except Exception:
+                pass
     
     elif data == "pending_payments":
         pending = user_manager.get_pending_payments()
@@ -841,23 +811,26 @@ async def handle_payment_callback(update, context):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.message.edit_text(
-                text,
-                reply_markup=reply_markup
-            )
+            try:
+                await query.message.edit_text(text, reply_markup=reply_markup)
+            except Exception:
+                pass
         else:
-            await query.message.edit_text(
-                f"""{format_info("No Pending Payments")}
+            try:
+                await query.message.edit_text(
+                    f"""{format_info("No Pending Payments")}
 
 ┌─ 📭 EMPTY
 │
   • There are no pending payments.
   • All payments have been processed.
 └─""",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
-                ])
-            )
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                    ])
+                )
+            except Exception:
+                pass
     
     elif data == "list_users":
         users = user_manager.users
@@ -887,22 +860,25 @@ async def handle_payment_callback(update, context):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.message.edit_text(
-                text,
-                reply_markup=reply_markup
-            )
+            try:
+                await query.message.edit_text(text, reply_markup=reply_markup)
+            except Exception:
+                pass
         else:
-            await query.message.edit_text(
-                f"""{format_info("No Users")}
+            try:
+                await query.message.edit_text(
+                    f"""{format_info("No Users")}
 
 ┌─ 📭 EMPTY
 │
   • No users have registered yet.
 └─""",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
-                ])
-            )
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                    ])
+                )
+            except Exception:
+                pass
     
     elif data == "list_sudo":
         sudo_users = user_manager.get_sudo_users()
@@ -931,38 +907,49 @@ async def handle_payment_callback(update, context):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await query.message.edit_text(
-                text,
-                reply_markup=reply_markup
-            )
+            try:
+                await query.message.edit_text(text, reply_markup=reply_markup)
+            except Exception:
+                pass
         else:
-            await query.message.edit_text(
-                f"""{format_info("No Sudo Users")}
+            try:
+                await query.message.edit_text(
+                    f"""{format_info("No Sudo Users")}
 
 ┌─ 📭 EMPTY
 │
   • There are no sudo users.
   • Use /addsudo to add one.
 └─""",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔙 Back", callback_data="back")]
-                ])
-            )
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔙 Back", callback_data="back")]
+                    ])
+                )
+            except Exception:
+                pass
     
     elif data == "refresh_pending":
-        await query.message.delete()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
         await pending_command(update, context)
     
     elif data == "refresh_users":
-        await query.message.delete()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
         await users_command(update, context)
     
     elif data == "refresh_sudo":
-        await query.message.delete()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
         await sudo_list_command(update, context)
     
     elif data == "back":
-        # Go back to appropriate menu
         if user_manager.is_owner(query.from_user.id):
             await animate_owner_start(update, context, user_manager)
         else:
@@ -995,13 +982,15 @@ async def handle_payment_callback(update, context):
 
 async def show_owner_help(update, context):
     """Show help for owner."""
+    query = update.callback_query
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.message.edit_text(
-        f"""{format_header("📖 Owner Help", "📖")}
+    try:
+        await query.message.edit_text(
+            f"""{format_header("📖 Owner Help", "📖")}
 
 ┌─ 📚 COMMANDS
 │
@@ -1042,20 +1031,24 @@ async def show_owner_help(update, context):
 └─
 
 💡 Use buttons for quick access!""",
-        reply_markup=reply_markup
-    )
+            reply_markup=reply_markup
+        )
+    except Exception:
+        pass
 
 
 async def show_public_help(update, context):
     """Show help for public users."""
+    query = update.callback_query
     keyboard = [
         [InlineKeyboardButton("💳 Buy Plan", callback_data="buy_plan")],
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.message.edit_text(
-        f"""{format_header("📖 Help", "📖")}
+    try:
+        await query.message.edit_text(
+            f"""{format_header("📖 Help", "📖")}
 
 ┌─ ℹ️ INFORMATION
 │
@@ -1072,19 +1065,23 @@ async def show_public_help(update, context):
 └─
 
 📌 Click "Buy Plan" to get started!""",
-        reply_markup=reply_markup
-    )
+            reply_markup=reply_markup
+        )
+    except Exception:
+        pass
 
 
 async def show_about(update, context):
     """Show about information."""
+    query = update.callback_query
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.message.edit_text(
-        f"""{format_header("ℹ️ About Bot", "ℹ️")}
+    try:
+        await query.message.edit_text(
+            f"""{format_header("ℹ️ About Bot", "ℹ️")}
 
 ┌─ 🤖 BOT INFO
 │
@@ -1109,19 +1106,23 @@ async def show_about(update, context):
 └─
 
 Made with ❤️ using Python""",
-        reply_markup=reply_markup
-    )
+            reply_markup=reply_markup
+        )
+    except Exception:
+        pass
 
 
 async def show_contact(update, context):
     """Show contact information."""
+    query = update.callback_query
     keyboard = [
         [InlineKeyboardButton("🔙 Back", callback_data="back")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.callback_query.message.edit_text(
-        f"""{format_header("📞 Contact", "📞")}
+    try:
+        await query.message.edit_text(
+            f"""{format_header("📞 Contact", "📞")}
 
 ┌─ 📬 CONTACT INFO
 │
@@ -1132,8 +1133,10 @@ async def show_contact(update, context):
 └─
 
 📌 Owner will respond within 24 hours.""",
-        reply_markup=reply_markup
-    )
+            reply_markup=reply_markup
+        )
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -1144,7 +1147,6 @@ def load_json(filename, default):
     if not os.path.exists(filename):
         save_json(filename, default)
         return default
-
     try:
         with open(filename, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -1160,7 +1162,6 @@ def save_json(filename, data):
 def load_usernames():
     if not os.path.exists(config.USERNAMES_FILE):
         return []
-
     with open(config.USERNAMES_FILE, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
 
@@ -1176,16 +1177,7 @@ def save_usernames(names):
 # ============================================================
 
 session_data = load_json(config.SESSION_FILE, {"session": ""})
-
-target_data = load_json(
-    config.TARGET_FILE,
-    {
-        "target_id": config.DEFAULT_TARGET_ID,
-        "target_type": "channel",
-        "target_link": ""
-    }
-)
-
+target_data = load_json(config.TARGET_FILE, {"target_id": config.DEFAULT_TARGET_ID, "target_type": "channel", "target_link": ""})
 usernames = load_usernames()
 delay_seconds = 60
 rotation_task: Optional[asyncio.Task] = None
@@ -1205,38 +1197,29 @@ def is_owner(update):
 
 
 async def check_access(update, context):
-    """Check if user has access to the bot."""
     user_id = update.effective_user.id
     user_manager = context.bot_data.get('user_manager')
-    
-    # Owner always has access
     if user_manager.is_owner(user_id):
         return True
-    
-    # Sudo users always have access
     if user_manager.is_sudo(user_id):
         return True
-    
-    # Check if user is registered and active
     if user_manager.is_active(user_id):
         return True
-    
     return False
 
 
 async def owner_only(update):
-    """Check if user is the owner."""
     if not is_owner(update):
         if update.message:
-            await update.message.reply_text(format_error("❌ You are not authorized.\nThis command is for the bot owner only."))
+            await safe_reply_text(update, format_error("❌ You are not authorized.\nThis command is for the bot owner only."))
         return False
     return True
 
 
 async def require_access(update, context):
-    """Decorator to check access before executing command."""
     if not await check_access(update, context):
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_error("Access Denied")}
 
 ┌─ 🔒 RESTRICTED
@@ -1259,7 +1242,7 @@ async def require_access(update, context):
 
 
 # ============================================================
-# /START - WITH USER MANAGEMENT
+# /START COMMAND
 # ============================================================
 
 async def start_command(update, context):
@@ -1268,21 +1251,13 @@ async def start_command(update, context):
     user_id = user.id
     user_manager = context.bot_data.get('user_manager')
     
-    # Register user if not exists
-    user_manager.register_user(
-        user_id,
-        user.username,
-        user.first_name
-    )
+    user_manager.register_user(user_id, user.username, user.first_name)
     
-    # Owner gets full access
     if user_manager.is_owner(user_id):
         await animate_owner_start(update, context, user_manager)
         return
     
-    # Sudo users get full access
     if user_manager.is_sudo(user_id):
-        remaining = "♾️ Unlimited"
         keyboard = [
             [
                 InlineKeyboardButton("📊 Status", callback_data="status"),
@@ -1299,7 +1274,8 @@ async def start_command(update, context):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_header("👑 Sudo User Access", "👑")}
 
 ┌─ 👤 USER INFO
@@ -1323,7 +1299,6 @@ async def start_command(update, context):
         )
         return
     
-    # Check if user has active subscription
     if user_manager.is_active(user_id):
         remaining = user_manager.format_remaining_time(user_id)
         keyboard = [
@@ -1345,7 +1320,8 @@ async def start_command(update, context):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_header("✅ Welcome Back!", "👋")}
 
 ┌─ 👤 USER INFO
@@ -1369,7 +1345,6 @@ async def start_command(update, context):
         )
         return
     
-    # User is not active - show restricted access
     await animate_initialization(update, context, user_manager)
 
 
@@ -1378,12 +1353,12 @@ async def start_command(update, context):
 # ============================================================
 
 async def add_sudo_command(update, context):
-    """Add a sudo user (owner only)."""
     if not await owner_only(update):
         return
     
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_error("Usage Error")}
 
 ┌─ 📝 USAGE
@@ -1405,25 +1380,21 @@ async def add_sudo_command(update, context):
     try:
         user_id = int(user_id_str)
     except ValueError:
-        await update.message.reply_text(format_error("Invalid user ID. Please provide a numeric ID."))
+        await safe_reply_text(update, format_error("Invalid user ID. Please provide a numeric ID."))
         return
     
     if user_manager.is_owner(user_id):
-        await update.message.reply_text(format_error("Cannot add owner as sudo."))
+        await safe_reply_text(update, format_error("Cannot add owner as sudo."))
         return
     
     if user_manager.is_sudo(user_id):
-        await update.message.reply_text(format_info(f"User {user_id} is already a sudo user."))
+        await safe_reply_text(update, format_info(f"User {user_id} is already a sudo user."))
         return
     
-    # Add sudo user
     user_manager.add_sudo_user(user_id)
-    
-    # Get user info if available
     user_data = user_manager.users.get(str(user_id), {})
     username = user_data.get('username', 'Unknown')
     
-    # Notify the user
     try:
         await context.bot.send_message(
             chat_id=user_id,
@@ -1442,7 +1413,6 @@ async def add_sudo_command(update, context):
     except:
         pass
     
-    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
@@ -1455,7 +1425,8 @@ async def add_sudo_command(update, context):
 └─"""
     )
     
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Sudo User Added")}
 
 ┌─ 👑 SUDO INFO
@@ -1472,12 +1443,12 @@ async def add_sudo_command(update, context):
 
 
 async def remove_sudo_command(update, context):
-    """Remove a sudo user (owner only)."""
     if not await owner_only(update):
         return
     
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_error("Usage Error")}
 
 ┌─ 📝 USAGE
@@ -1499,21 +1470,19 @@ async def remove_sudo_command(update, context):
     try:
         user_id = int(user_id_str)
     except ValueError:
-        await update.message.reply_text(format_error("Invalid user ID. Please provide a numeric ID."))
+        await safe_reply_text(update, format_error("Invalid user ID. Please provide a numeric ID."))
         return
     
     if user_manager.is_owner(user_id):
-        await update.message.reply_text(format_error("Cannot remove owner from sudo."))
+        await safe_reply_text(update, format_error("Cannot remove owner from sudo."))
         return
     
     if not user_manager.is_sudo(user_id):
-        await update.message.reply_text(format_info(f"User {user_id} is not a sudo user."))
+        await safe_reply_text(update, format_info(f"User {user_id} is not a sudo user."))
         return
     
-    # Remove sudo user
     user_manager.remove_sudo_user(user_id)
     
-    # Notify the user
     try:
         await context.bot.send_message(
             chat_id=user_id,
@@ -1532,7 +1501,6 @@ async def remove_sudo_command(update, context):
     except:
         pass
     
-    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
@@ -1544,7 +1512,8 @@ async def remove_sudo_command(update, context):
 └─"""
     )
     
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Sudo User Removed")}
 
 ┌─ 👑 SUDO INFO
@@ -1560,7 +1529,6 @@ async def remove_sudo_command(update, context):
 
 
 async def sudo_list_command(update, context):
-    """List all sudo users (owner only)."""
     if not await owner_only(update):
         return
     
@@ -1568,7 +1536,8 @@ async def sudo_list_command(update, context):
     sudo_users = user_manager.get_sudo_users()
     
     if not sudo_users:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_info("No Sudo Users")}
 
 ┌─ 📭 EMPTY
@@ -1598,7 +1567,7 @@ async def sudo_list_command(update, context):
 
 📌 Sudo users have unlimited lifetime access."""
     
-    await update.message.reply_text(text)
+    await safe_reply_text(update, text)
 
 
 # ============================================================
@@ -1606,7 +1575,6 @@ async def sudo_list_command(update, context):
 # ============================================================
 
 async def pending_command(update, context):
-    """View pending payments (owner only)."""
     if not await owner_only(update):
         return
     
@@ -1614,7 +1582,8 @@ async def pending_command(update, context):
     pending = user_manager.get_pending_payments()
     
     if not pending:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_info("No Pending Payments")}
 
 ┌─ 📭 EMPTY
@@ -1643,16 +1612,16 @@ async def pending_command(update, context):
 
 📌 Use /approve <id> or /reject <id> to manage payments."""
     
-    await update.message.reply_text(text)
+    await safe_reply_text(update, text)
 
 
 async def approve_command(update, context):
-    """Approve a payment (owner only)."""
     if not await owner_only(update):
         return
     
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_error("Usage Error")}
 
 ┌─ 📝 USAGE
@@ -1672,22 +1641,18 @@ async def approve_command(update, context):
     payment_id = context.args[0].strip()
     
     if payment_id not in user_manager.pending:
-        await update.message.reply_text(format_error("Invalid payment ID."))
+        await safe_reply_text(update, format_error("Invalid payment ID."))
         return
     
     payment = user_manager.pending[payment_id]
     if payment.get("status") != "pending":
-        await update.message.reply_text(format_info(f"This payment is already {payment.get('status')}."))
+        await safe_reply_text(update, format_info(f"This payment is already {payment.get('status')}."))
         return
     
-    # Approve payment
     user_manager.approve_payment(payment_id)
-    
-    # Get user info
     user_id = int(payment["user_id"])
     plan_name = payment["plan_name"]
     
-    # Notify the user
     try:
         await context.bot.send_message(
             chat_id=user_id,
@@ -1706,7 +1671,6 @@ async def approve_command(update, context):
     except:
         pass
     
-    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
@@ -1722,7 +1686,8 @@ async def approve_command(update, context):
 └─"""
     )
     
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Payment Approved")}
 
 ┌─ ✅ APPROVED
@@ -1739,12 +1704,12 @@ async def approve_command(update, context):
 
 
 async def reject_command(update, context):
-    """Reject a payment (owner only)."""
     if not await owner_only(update):
         return
     
     if not context.args:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_error("Usage Error")}
 
 ┌─ 📝 USAGE
@@ -1764,21 +1729,17 @@ async def reject_command(update, context):
     payment_id = context.args[0].strip()
     
     if payment_id not in user_manager.pending:
-        await update.message.reply_text(format_error("Invalid payment ID."))
+        await safe_reply_text(update, format_error("Invalid payment ID."))
         return
     
     payment = user_manager.pending[payment_id]
     if payment.get("status") != "pending":
-        await update.message.reply_text(format_info(f"This payment is already {payment.get('status')}."))
+        await safe_reply_text(update, format_info(f"This payment is already {payment.get('status')}."))
         return
     
-    # Reject payment
     user_manager.reject_payment(payment_id)
-    
-    # Get user info
     user_id = int(payment["user_id"])
     
-    # Notify the user
     try:
         await context.bot.send_message(
             chat_id=user_id,
@@ -1797,7 +1758,6 @@ async def reject_command(update, context):
     except:
         pass
     
-    # Send to logger group
     await send_to_logger_group(
         context,
         f"""
@@ -1813,7 +1773,8 @@ async def reject_command(update, context):
 └─"""
     )
     
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Payment Rejected")}
 
 ┌─ ❌ REJECTED
@@ -1830,7 +1791,6 @@ async def reject_command(update, context):
 
 
 async def users_command(update, context):
-    """List all users (owner only)."""
     if not await owner_only(update):
         return
     
@@ -1838,7 +1798,8 @@ async def users_command(update, context):
     users = user_manager.users
     
     if not users:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_info("No Users")}
 
 ┌─ 📭 EMPTY
@@ -1867,7 +1828,7 @@ async def users_command(update, context):
     text += """
 └─"""
     
-    await update.message.reply_text(text)
+    await safe_reply_text(update, text)
 
 
 # ============================================================
@@ -1876,32 +1837,19 @@ async def users_command(update, context):
 
 async def connect_saved_session():
     global client
-
     session = session_data.get("session", "")
-
     if not session:
         return None
-
     try:
-        new_client = TelegramClient(
-            StringSession(session),
-            config.API_ID,
-            config.API_HASH
-        )
-
+        new_client = TelegramClient(StringSession(session), config.API_ID, config.API_HASH)
         await new_client.connect()
-
         if not await new_client.is_user_authorized():
             await new_client.disconnect()
             return None
-
         client = new_client
         print("Telegram user session connected.")
-
         await load_entity_cache()
-        
         return client
-
     except Exception as e:
         print("Session connection failed:", e)
         return None
@@ -1909,15 +1857,12 @@ async def connect_saved_session():
 
 async def load_entity_cache():
     global entity_cache_loaded
-    
     if not client or entity_cache_loaded:
         return
-    
     try:
         dialogs = await client.get_dialogs()
         entity_cache_loaded = True
         print(f"✅ Entity cache loaded with {len(dialogs)} dialogs.")
-        
         target_id = target_data.get("target_id")
         if target_id:
             try:
@@ -1931,7 +1876,6 @@ async def load_entity_cache():
 
 async def ensure_client():
     global client
-
     if client:
         try:
             if client.is_connected():
@@ -1941,7 +1885,6 @@ async def ensure_client():
                     return client
         except Exception:
             pass
-
     return await connect_saved_session()
 
 
@@ -1950,49 +1893,33 @@ async def ensure_client():
 # ============================================================
 
 async def connect_command(update, context):
-    """Handle /connect command - Owner only."""
     if not await owner_only(update):
         return
-    
     global client, entity_cache_loaded
-
     if not context.args:
-        await update.message.reply_text(format_error("Usage:\n/connect <session_string>"))
+        await safe_reply_text(update, format_error("Usage:\n/connect <session_string>"))
         return
-
     session_string = context.args[0].strip()
-
     try:
-        test_client = TelegramClient(
-            StringSession(session_string),
-            config.API_ID,
-            config.API_HASH
-        )
-
+        test_client = TelegramClient(StringSession(session_string), config.API_ID, config.API_HASH)
         await test_client.connect()
-
         if not await test_client.is_user_authorized():
             await test_client.disconnect()
-            await update.message.reply_text(format_error("Invalid session string."))
+            await safe_reply_text(update, format_error("Invalid session string."))
             return
-
         me = await test_client.get_me()
-
         session_data["session"] = session_string
         save_json(config.SESSION_FILE, session_data)
-
         if client:
             try:
                 await client.disconnect()
             except Exception:
                 pass
-
         client = test_client
         entity_cache_loaded = False
-        
         await load_entity_cache()
-
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_success("Session Connected")}
 
 ┌─ 👤 ACCOUNT INFO
@@ -2002,20 +1929,15 @@ async def connect_command(update, context):
   • Username: @{me.username if me.username else 'N/A'}
 └─"""
         )
-
     except Exception as e:
-        await update.message.reply_text(format_error(f"Connection failed:\n{e}"))
+        await safe_reply_text(update, format_error(f"Connection failed:\n{e}"))
 
 
 async def set_target(link, target_type):
-    """Set the target for username rotation."""
     tg = await ensure_client()
-    
     if not tg:
         raise RuntimeError("No Telegram session connected.")
-    
     link = link.strip()
-    
     try:
         if "t.me/" in link:
             username = link.split("t.me/", 1)[1]
@@ -2024,41 +1946,31 @@ async def set_target(link, target_type):
             entity = await tg.get_entity(username)
         else:
             entity = await tg.get_entity(link)
-        
         target_id = utils.get_peer_id(entity)
-        
         target_data.update({
             "target_id": target_id,
             "target_type": target_type,
             "target_link": link
         })
-        
         save_json(config.TARGET_FILE, target_data)
-        
         global entity_cache_loaded
         entity_cache_loaded = False
-        
         return entity
-        
     except Exception as e:
         raise RuntimeError(f"Could not resolve target: {e}")
 
 
 async def addchannel_command(update, context):
-    """Handle /addchannel command."""
     if not await require_access(update, context):
         return
-
     if not context.args:
-        await update.message.reply_text(format_error("Usage:\n/addchannel https://t.me/channelname"))
+        await safe_reply_text(update, format_error("Usage:\n/addchannel https://t.me/channelname"))
         return
-
     link = context.args[0]
-
     try:
         entity = await set_target(link, "channel")
-
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_success("Channel Added")}
 
 ┌─ 📺 CHANNEL INFO
@@ -2070,26 +1982,21 @@ async def addchannel_command(update, context):
 
 💡 Ready for username rotation!"""
         )
-
     except Exception as e:
-        await update.message.reply_text(format_error(f"Failed to add channel:\n{e}"))
+        await safe_reply_text(update, format_error(f"Failed to add channel:\n{e}"))
 
 
 async def addgroup_command(update, context):
-    """Handle /addgroup command."""
     if not await require_access(update, context):
         return
-
     if not context.args:
-        await update.message.reply_text(format_error("Usage:\n/addgroup https://t.me/groupname"))
+        await safe_reply_text(update, format_error("Usage:\n/addgroup https://t.me/groupname"))
         return
-
     link = context.args[0]
-
     try:
         entity = await set_target(link, "group")
-
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_success("Group Added")}
 
 ┌─ 👥 GROUP INFO
@@ -2102,25 +2009,19 @@ async def addgroup_command(update, context):
 ⚠️ Note: Ordinary groups do not support 
    username updates via API."""
         )
-
     except Exception as e:
-        await update.message.reply_text(format_error(f"Failed to add group:\n{e}"))
+        await safe_reply_text(update, format_error(f"Failed to add group:\n{e}"))
 
 
 async def addusername_command(update, context):
-    """Handle /addusername command."""
     if not await require_access(update, context):
         return
-
     global usernames
-
     if not context.args:
-        await update.message.reply_text(format_error("Usage:\n/addusername @name1, @name2"))
+        await safe_reply_text(update, format_error("Usage:\n/addusername @name1, @name2"))
         return
-
     raw = " ".join(context.args)
     names = [normalize_username(x) for x in raw.split(",") if x.strip()]
-
     added = 0
     skipped = 0
     for name in names:
@@ -2129,10 +2030,9 @@ async def addusername_command(update, context):
             added += 1
         else:
             skipped += 1
-
     save_usernames(usernames)
-
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Usernames Added")}
 
 ┌─ 📝 SUMMARY
@@ -2147,15 +2047,12 @@ async def addusername_command(update, context):
 
 
 async def done_command(update, context):
-    """Handle /done command."""
     if not await require_access(update, context):
         return
-
     global usernames
-
     usernames = load_usernames()
-
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("Username List Finalized")}
 
 ┌─ 📊 STATS
@@ -2169,12 +2066,9 @@ async def done_command(update, context):
 
 
 def parse_delay(text):
-    """Parse delay from text input."""
     text = text.lower().strip()
-    
     pattern = r"(\d+)\s*(hour|hours|hr|hrs|min|mins|minute|minutes|sec|secs|second|seconds)"
     matches = re.findall(pattern, text)
-    
     if not matches:
         raise ValueError(
             "Invalid delay format.\n\n"
@@ -2185,27 +2079,21 @@ def parse_delay(text):
             "  /setdelay 1hour 30min\n"
             "  /setdelay 1h 30m 10s"
         )
-    
     total = 0
-    
     for value, unit in matches:
         value = int(value)
-        
         if unit in ["hour", "hours", "hr", "hrs"]:
             total += value * 3600
         elif unit in ["min", "mins", "minute", "minutes"]:
             total += value * 60
         elif unit in ["sec", "secs", "second", "seconds"]:
             total += value
-    
     if total <= 0:
         raise ValueError("Delay must be greater than zero.")
-    
     return total
 
 
 def normalize_username(username):
-    """Normalize username by removing @ symbol."""
     username = username.strip()
     if username.startswith("@"):
         username = username[1:]
@@ -2213,27 +2101,22 @@ def normalize_username(username):
 
 
 async def setdelay_command(update, context):
-    """Handle /setdelay command."""
     if not await require_access(update, context):
         return
-
     global delay_seconds
-
     if not context.args:
-        await update.message.reply_text(format_error(
+        await safe_reply_text(update, format_error(
             "Usage:\n"
             "/setdelay 20min\n"
             "/setdelay 1hour\n"
             "/setdelay 1h 30m 10s"
         ))
         return
-
     text = " ".join(context.args)
-
     try:
         delay_seconds = parse_delay(text)
-
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_success("Delay Updated")}
 
 ┌─ ⏱️ NEW DELAY
@@ -2242,131 +2125,85 @@ async def setdelay_command(update, context):
   • Seconds: {delay_seconds}s
 └─"""
         )
-
     except ValueError as e:
-        await update.message.reply_text(format_error(str(e)))
+        await safe_reply_text(update, format_error(str(e)))
 
 
 async def change_username(username):
-    """Change username of target."""
     tg = await ensure_client()
-    
     if not tg:
         return (False, "Telegram session not connected.")
-    
     target_id = target_data.get("target_id")
-    
     if not target_id:
         return (False, "No target set.")
-    
     username = normalize_username(username)
-    
     try:
         entity = await tg.get_entity(target_id)
-        
         if not getattr(entity, "broadcast", False):
-            return (
-                False,
-                "Target is not a broadcast channel.\n"
-                "Telegram does not allow username operations on ordinary groups."
-            )
-        
+            return (False, "Target is not a broadcast channel.\nTelegram does not allow username operations on ordinary groups.")
         await tg(UpdateUsernameRequest(entity, username))
-        
         return (True, username)
-        
     except FloodWaitError as e:
         return (False, f"FloodWait: wait {e.seconds} seconds.")
-    
     except UsernameOccupiedError:
         return (False, f"@{username} is already occupied.")
-    
     except UsernameInvalidError:
         return (False, f"@{username} is invalid.")
-    
     except RPCError as e:
         return (False, f"Telegram error: {e}")
-    
     except Exception as e:
         return (False, str(e))
 
 
 async def rotation_loop():
-    """Main rotation loop."""
     global current_index
-    
     print("🔄 Rotation started.")
-    
     while True:
         if not usernames:
             print("No usernames available.")
             break
-        
         if not target_data.get("target_id"):
             print("No target configured.")
             break
-        
         await load_entity_cache()
-        
         username = usernames[current_index]
-        
         success, result = await change_username(username)
-        
         if success:
             print(f"✅ Username changed: @{result}")
             current_index = (current_index + 1) % len(usernames)
             await asyncio.sleep(delay_seconds)
         else:
             print(f"❌ Username change failed: {result}")
-            
             if "FloodWait" in result:
                 match = re.search(r"(\d+)\s+seconds", result)
                 if match:
                     wait = int(match.group(1))
                     await asyncio.sleep(wait)
                     continue
-            
             await asyncio.sleep(max(delay_seconds, 60))
-    
     print("⏹️ Rotation stopped.")
 
 
 async def forcestart_command(update, context):
-    """Handle /forcestart command."""
     if not await require_access(update, context):
         return
-    
     global rotation_task
-    
     if not target_data.get("target_id"):
-        await update.message.reply_text(
-            format_error("No target set!\nUse /addgroup or /addchannel")
-        )
+        await safe_reply_text(update, format_error("No target set!\nUse /addgroup or /addchannel"))
         return
-    
     if not usernames:
-        await update.message.reply_text(
-            format_error("No usernames added.\nUse /addusername")
-        )
+        await safe_reply_text(update, format_error("No usernames added.\nUse /addusername"))
         return
-    
     tg = await ensure_client()
-    
     if not tg:
-        await update.message.reply_text(
-            format_error("Telegram session not connected.\nUse /connect")
-        )
+        await safe_reply_text(update, format_error("Telegram session not connected.\nUse /connect"))
         return
-    
     if rotation_task and not rotation_task.done():
-        await update.message.reply_text(
-            format_info("Rotation is already running.")
-        )
+        await safe_reply_text(update, format_info("Rotation is already running."))
         return
-    
     rotation_task = asyncio.create_task(rotation_loop())
-    
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_header("🚀 Rotation Started", "🚀")}
 
 ┌─ 📊 CONFIGURATION
@@ -2383,22 +2220,18 @@ async def forcestart_command(update, context):
 
 
 async def forcestop_command(update, context):
-    """Handle /forcestop command."""
     if not await require_access(update, context):
         return
-    
     global rotation_task
-    
     if rotation_task and not rotation_task.done():
         rotation_task.cancel()
         try:
             await rotation_task
         except asyncio.CancelledError:
             pass
-        
         rotation_task = None
-        
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_header("⏹️ Rotation Stopped", "⏹️")}
 
 ┌─ ℹ️ STATUS
@@ -2408,33 +2241,23 @@ async def forcestop_command(update, context):
 └─"""
         )
     else:
-        await update.message.reply_text(format_info("Rotation is not running."))
+        await safe_reply_text(update, format_info("Rotation is not running."))
 
 
 async def change_now_command(update, context):
-    """Handle /change_now command."""
     if not await require_access(update, context):
         return
-    
     global current_index
-    
     if not target_data.get("target_id"):
-        await update.message.reply_text(
-            format_error("No target set!\nUse /addgroup or /addchannel")
-        )
+        await safe_reply_text(update, format_error("No target set!\nUse /addgroup or /addchannel"))
         return
-    
     if not usernames:
-        await update.message.reply_text(
-            format_error("Username list is empty.\nUse /addusername")
-        )
+        await safe_reply_text(update, format_error("Username list is empty.\nUse /addusername"))
         return
-    
     await load_entity_cache()
-    
     username = usernames[current_index]
-    
-    status_msg = await update.message.reply_text(
+    status_msg = await safe_reply_text(
+        update,
         f"""┌─ 🔄 CHANGING USERNAME
 │
   • Username: @{username}
@@ -2442,49 +2265,46 @@ async def change_now_command(update, context):
 └─
 ⏳ Please wait..."""
     )
-    
     success, result = await change_username(username)
-    
     if success:
         current_index = (current_index + 1) % len(usernames)
-        await status_msg.edit_text(
-            f"""{format_success("Username Changed Successfully")}
+        if status_msg:
+            await safe_edit_message(
+                status_msg,
+                f"""{format_success("Username Changed Successfully")}
 
 ┌─ ✅ UPDATE COMPLETE
 │
   • New Username: @{result}
   • Next Index: {current_index + 1}/{len(usernames)}
 └─"""
-        )
+            )
     else:
-        await status_msg.edit_text(
-            f"""{format_error("Username Change Failed")}
+        if status_msg:
+            await safe_edit_message(
+                status_msg,
+                f"""{format_error("Username Change Failed")}
 
 ┌─ ❌ ERROR DETAILS
 │
   • Username: @{username}
   • Error: {result}
 └─"""
-        )
+            )
 
 
 async def status_command(update, context):
-    """Handle /status command."""
     if not await require_access(update, context):
         return
-    
     tg = await ensure_client()
-    
     session_connected = tg is not None
     session_status = "🟢 Connected" if session_connected else "🔴 Not Connected"
-    
     target_set = target_data.get("target_id") is not None
     target_status = "🟢 Set" if target_set else "🔴 Not Set"
-    
     running = rotation_task is not None and not rotation_task.done()
     rotation_status = "🟢 Running" if running else "🔴 Stopped"
-    
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_header("📊 System Status", "📊")}
 
 ┌─ 🔐 SESSION
@@ -2511,12 +2331,11 @@ async def status_command(update, context):
 
 
 async def list_command(update, context):
-    """Handle /list command."""
     if not await require_access(update, context):
         return
-    
     if not usernames:
-        await update.message.reply_text(
+        await safe_reply_text(
+            update,
             f"""{format_info("Username List")}
 
 ┌─ 📭 EMPTY
@@ -2526,35 +2345,28 @@ async def list_command(update, context):
 └─"""
         )
         return
-    
-    # Split into chunks to avoid message length limits
     chunk_size = 30
     chunks = [usernames[i:i + chunk_size] for i in range(0, len(usernames), chunk_size)]
-    
     for idx, chunk in enumerate(chunks, 1):
         formatted_list = []
         for i, name in enumerate(chunk, 1):
             formatted_list.append(f"  {i + (idx-1) * chunk_size}. @{name}")
-        
         text = f"""{format_header(f"Username List {idx}/{len(chunks)}", "📋")}
 
 {chr(10).join(formatted_list)}
 """
-        await update.message.reply_text(text)
+        await safe_reply_text(update, text)
 
 
 async def clear_command(update, context):
-    """Handle /clear command."""
     if not await require_access(update, context):
         return
-    
     global usernames, current_index
-    
     usernames = []
     current_index = 0
     save_usernames(usernames)
-    
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_success("List Cleared")}
 
 ┌─ 🗑️ COMPLETE
@@ -2566,15 +2378,11 @@ async def clear_command(update, context):
 
 
 async def current_command(update, context):
-    """Handle /current command."""
     if not await require_access(update, context):
         return
-    
     current_username = "Unknown"
     current_title = "N/A"
-    
     tg = await ensure_client()
-    
     if tg and target_data.get("target_id"):
         try:
             entity = await tg.get_entity(target_data["target_id"])
@@ -2586,8 +2394,8 @@ async def current_command(update, context):
                 current_title = title
         except Exception:
             pass
-    
-    await update.message.reply_text(
+    await safe_reply_text(
+        update,
         f"""{format_header("🎯 Current Target", "🎯")}
 
 ┌─ ℹ️ DETAILS
@@ -2606,12 +2414,26 @@ async def current_command(update, context):
 # ============================================================
 
 async def error_handler(update, context):
-    """Handle errors globally."""
+    """Handle errors globally with flood control."""
     print("Bot error:", context.error)
-    if update and update.effective_message:
-        await update.effective_message.reply_text(
-            format_error(f"An unexpected error occurred:\n{context.error}")
-        )
+    
+    # Check if error is RetryAfter (flood control)
+    if isinstance(context.error, RetryAfter):
+        wait_time = context.error.retry_after
+        print(f"Flood control: Need to wait {wait_time} seconds")
+        # Store wait time in context for retry
+        context.bot_data['flood_wait'] = wait_time
+        return
+    
+    # Try to notify user if possible
+    try:
+        if update and update.effective_message:
+            await safe_reply_text(
+                update,
+                format_error(f"An error occurred. Please try again later.")
+            )
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -2627,24 +2449,14 @@ def main():
 ╚═══════════════════════════════════════╝
     """)
     
-    # Check for required files
     if not os.path.exists("qr.jpg"):
         print("⚠️ Warning: qr.jpg not found in root directory!")
         print("   Please add qr.jpg for payment QR code.")
     
-    if not os.path.exists("config.py"):
-        print("❌ Error: config.py not found!")
-        print("   Please create config.py with required variables.")
-        return
-    
-    # Initialize user manager
     user_manager = UserManager()
-    
-    # Create application
     application = Application.builder().token(config.BOT_TOKEN).build()
-    
-    # Store user manager in bot data
     application.bot_data['user_manager'] = user_manager
+    application.bot_data['flood_wait'] = 0
     
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -2673,7 +2485,7 @@ def main():
     application.add_handler(CommandHandler("rmsudo", remove_sudo_command))
     application.add_handler(CommandHandler("sudolist", sudo_list_command))
     
-    # Callback query handler for inline buttons
+    # Callback query handler
     application.add_handler(CallbackQueryHandler(handle_payment_callback))
     
     # Error handler
