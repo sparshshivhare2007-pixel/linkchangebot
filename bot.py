@@ -3,6 +3,7 @@ import re
 import json
 from datetime import datetime
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError
 from config import *
 
@@ -228,10 +229,9 @@ async def connect_session(event):
 
     try:
         owner_session = TelegramClient(
-            'owner_session',
+            StringSession(session_string),
             API_ID,
-            API_HASH,
-            session_string=session_string
+            API_HASH
         )
         await owner_session.start()
         session_connected = True
@@ -490,10 +490,9 @@ async def auto_connect():
         print("🔄 Auto-connecting session...")
         try:
             owner_session = TelegramClient(
-                'owner_session',
+                StringSession(saved),
                 API_ID,
-                API_HASH,
-                session_string=saved
+                API_HASH
             )
             await owner_session.start()
             session_connected = True
