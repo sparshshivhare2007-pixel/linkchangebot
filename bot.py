@@ -3,7 +3,7 @@ import json
 import os
 import re
 from typing import Optional
-
+from telethon import utils
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.channels import UpdateUsernameRequest
