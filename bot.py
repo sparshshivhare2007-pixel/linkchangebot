@@ -877,7 +877,7 @@ async def mystatus_command(update, context):
 
 
 # ============================================================
-# CALLBACK HANDLER FOR INLINE BUTTONS (NO MARKDOWN)
+# CALLBACK HANDLER FOR INLINE BUTTONS
 # ============================================================
 
 async def button_callback(update, context):
@@ -929,9 +929,7 @@ This bot automatically rotates usernames for your Telegram channels.
         await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
 
     elif data == "back_to_start":
-        first_name = query.message.chat.first_name or "User"
-
-        caption = f"""
+        caption = """
 Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
 
 Link Changer Bot automatically rotates usernames for your channels — from your username list, with customizable delays and full control.
@@ -942,80 +940,17 @@ Use the buttons below to add Link Changer Bot to your channel, or explore everyt
 
         keyboard = [
             [
-                InlineKeyboardButton("👨‍💻 Developer", callback_data="developer"),
-                InlineKeyboardButton("📢 Channel", callback_data="channel"),
+                InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
+                InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
             ],
             [
-                InlineKeyboardButton("🆘 Support", callback_data="support"),
+                InlineKeyboardButton("🆘 Support", url=config.SUPPORT_LINK),
                 InlineKeyboardButton("❓ Help", callback_data="help"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(caption, reply_markup=reply_markup)
-
-    elif data == "developer":
-        # DIRECT LINK - Opens owner profile
-        dev_text = """
-👨‍💻 Developer
-
-Owner: @oyeeee
-
-Contact:
-• Click the button below to chat with owner
-
-Made with ❤️ for Telegram community
-"""
-        keyboard = [
-            [InlineKeyboardButton("📩 Contact Owner", url=f"tg://user?id={config.OWNER_ID}")],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
-        ]
-        await query.edit_message_text(dev_text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif data == "channel":
-        # DIRECT LINK - Opens channel
-        channel_text = """
-📢 Official Channel
-
-🔔 Join for Updates!
-
-• ✨ New features
-• 🐛 Bug fixes
-• 📚 Tutorials
-• 💡 Tips & tricks
-
-Click the button below to join our channel!
-"""
-        keyboard = [
-            [InlineKeyboardButton("📢 Join Channel", url=config.CHANNEL_LINK)],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
-        ]
-        await query.edit_message_text(channel_text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif data == "support":
-        # DIRECT LINK - Opens support
-        support_text = """
-❓ Support Center
-
-🆘 Need Help?
-
-📖 Quick Guide:
-/connect - Connect session
-/addchannel - Set channel target
-/addusername - Add usernames
-/forcestart - Start rotation
-/status - Check status
-
-📩 Contact Support:
-Click the button below to contact support
-
-We reply within 24 hours!
-"""
-        keyboard = [
-            [InlineKeyboardButton("📩 Contact Support", url=config.SUPPORT_LINK)],
-            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
-        ]
-        await query.edit_message_text(support_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ============================================================
@@ -1027,9 +962,7 @@ async def start_command(update, context):
     if not await authorized_only(update):
         return
 
-    first_name = update.effective_user.first_name or "User"
-
-    caption = f"""
+    caption = """
 Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
 
 Link Changer Bot automatically rotates usernames for your channels — from your username list, with customizable delays and full control.
@@ -1040,11 +973,11 @@ Use the buttons below to add Link Changer Bot to your channel, or explore everyt
 
     keyboard = [
         [
-            InlineKeyboardButton("👨‍💻 Developer", callback_data="developer"),
-            InlineKeyboardButton("📢 Channel", callback_data="channel"),
+            InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
+            InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
         ],
         [
-            InlineKeyboardButton("🆘 Support", callback_data="support"),
+            InlineKeyboardButton("🆘 Support", url=config.SUPPORT_LINK),
             InlineKeyboardButton("❓ Help", callback_data="help"),
         ]
     ]
@@ -1576,7 +1509,7 @@ def main():
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("current", current_command))
 
-    # Callback handler for inline buttons
+    # Callback handler for inline buttons (only Help button)
     application.add_handler(CallbackQueryHandler(button_callback))
 
     application.add_error_handler(error_handler)
