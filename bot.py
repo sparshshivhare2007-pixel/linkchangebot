@@ -282,14 +282,6 @@ def format_waiting(message: str) -> str:
 └─"""
 
 
-def format_owner_notification(message: str) -> str:
-    return f"""
-┌─ 🔔 OWNER NOTIFICATION
-│
-{message}
-└─"""
-
-
 def format_delay(seconds: int) -> str:
     hours = seconds // 3600
     seconds %= 3600
@@ -740,7 +732,7 @@ async def show_plans(update, context):
 
 
 async def show_payment(update, context, plan_days):
-    """Show payment details with QR code."""
+    """Show payment details with QR code and screenshot upload option."""
     query = update.callback_query
     
     if not query or not query.message:
@@ -760,7 +752,7 @@ async def show_payment(update, context, plan_days):
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ I've Paid", callback_data=f"paid_{payment_id}"),
+            InlineKeyboardButton("📸 Send Payment Screenshot", callback_data=f"screenshot_{payment_id}"),
             InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{payment_id}"),
         ],
         [
@@ -780,13 +772,13 @@ async def show_payment(update, context, plan_days):
 ├─ 📋 INSTRUCTIONS
 │  1. Scan the QR code below
 │  2. Send payment of ₹{amount:.0f}
-│  3. Click "I've Paid" button
-│  4. Owner will be notified automatically
-│  5. Wait for owner verification (1 hour max)
+│  3. Click "Send Payment Screenshot"
+│  4. Upload your payment screenshot
+│  5. Owner will verify and approve
 │
 └─
 
-⏳ Click "I've Paid" after sending payment..."""
+📸 Please send your payment screenshot after paying!"""
     
     try:
         if qr_exists:
@@ -823,28 +815,63 @@ async def show_payment(update, context, plan_days):
         print(f"Error showing payment: {e}")
 
 
-async def send_to_logger_group(context, text, photo_path=None):
-    """Send message to logger group with QR code"""
+async def send_to_logger_group(context, payment_id, payment, photo=None, photo_caption=None):
+    """Send payment screenshot to logger group with approve/reject buttons"""
+    
+    # Create inline keyboard with approve/reject buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Approve Payment", callback_data=f"approve_{payment_id}"),
+            InlineKeyboardButton("❌ Reject Payment", callback_data=f"reject_{payment_id}"),
+        ],
+        [
+            InlineKeyboardButton("📋 View All Pending", callback_data="pending_payments"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    caption = f"""
+┌─ 💳 NEW PAYMENT REQUEST
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • User ID: `{payment['user_id']}`
+  • Plan: {payment['plan_name']}
+  • Amount: ₹{payment['amount']:.0f}
+  • Time: {datetime.fromtimestamp(payment['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}
+│
+├─ 📋 ACTIONS
+│  Click a button below to approve or reject this payment
+│
+└─
+
+⏳ Waiting for owner verification..."""
+    
     try:
-        if photo_path and os.path.exists(photo_path):
-            with open(photo_path, "rb") as f:
-                await context.bot.send_photo(
-                    chat_id=config.LOGGER_GROUP_ID,
-                    photo=f,
-                    caption=text
-                )
+        if photo:
+            # Send photo with buttons
+            await context.bot.send_photo(
+                chat_id=config.LOGGER_GROUP_ID,
+                photo=photo,
+                caption=caption,
+                reply_markup=reply_markup
+            )
         else:
+            # Send text message with buttons
             await context.bot.send_message(
                 chat_id=config.LOGGER_GROUP_ID,
-                text=text
+                text=caption,
+                reply_markup=reply_markup
             )
         print(f"✅ Sent to logger group: {config.LOGGER_GROUP_ID}")
+        return True
     except Exception as e:
         print(f"❌ Failed to send to logger group: {e}")
+        return False
 
 
-async def notify_owner(context, payment_id, payment):
-    """Send notification to owner with approval buttons"""
+async def notify_owner(context, payment_id, payment, photo=None):
+    """Send notification to owner with approve/reject buttons"""
     owner_id = config.OWNER_ID
     
     keyboard = [
@@ -879,15 +906,114 @@ async def notify_owner(context, payment_id, payment):
 ⚠️ User is waiting for your approval!"""
     
     try:
-        await context.bot.send_message(
-            chat_id=owner_id,
-            text=notification_text,
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        if photo:
+            await context.bot.send_photo(
+                chat_id=owner_id,
+                photo=photo,
+                caption=notification_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=owner_id,
+                text=notification_text,
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
         print(f"✅ Notification sent to owner: {owner_id}")
+        return True
     except Exception as e:
         print(f"❌ Failed to notify owner: {e}")
+        return False
+
+
+async def handle_screenshot(update, context):
+    """Handle payment screenshot from user"""
+    user_id = update.effective_user.id
+    user_manager = context.bot_data.get('user_manager')
+    
+    # Check if user has a pending payment
+    pending = user_manager.get_pending_payments()
+    user_pending = None
+    payment_id = None
+    
+    for pid, payment in pending.items():
+        if int(payment["user_id"]) == user_id:
+            user_pending = payment
+            payment_id = pid
+            break
+    
+    if not user_pending:
+        await update.message.reply_text(
+            format_error("❌ No pending payment found. Please purchase a plan first.")
+        )
+        return
+    
+    # Check if message has photo
+    if not update.message.photo:
+        await update.message.reply_text(
+            format_error("❌ Please send a photo/screenshot of your payment.")
+        )
+        return
+    
+    # Get the photo
+    photo = update.message.photo[-1]
+    photo_file = await photo.get_file()
+    
+    # Download photo temporarily
+    temp_path = f"temp_screenshot_{payment_id}.jpg"
+    await photo_file.download_to_drive(temp_path)
+    
+    # Send waiting message to user
+    await update.message.reply_text(
+        f"""{format_waiting("📸 Payment Screenshot Received!")}
+
+┌─ 📤 SCREENSHOT SUBMITTED
+│
+  • Payment ID: `{payment_id}`
+  • Status: ⏳ Waiting for owner verification
+│
+├─ 📋 WHAT HAPPENS NEXT
+│  1. ✅ Screenshot sent to owner
+│  2. 👀 Owner will verify your payment
+│  3. 🔔 You will be notified when approved
+│
+└─
+
+⏱️ Please wait for owner to verify your payment.
+📢 This usually takes a few minutes to 1 hour."""
+    )
+    
+    # Send to logger group with photo and buttons
+    await send_to_logger_group(context, payment_id, user_pending, open(temp_path, "rb"))
+    
+    # Send notification to owner with photo and buttons
+    await notify_owner(context, payment_id, user_pending, open(temp_path, "rb"))
+    
+    # Clean up temp file
+    try:
+        os.remove(temp_path)
+    except:
+        pass
+    
+    # Also send to logger group text notification
+    logger_text = f"""
+┌─ 📸 PAYMENT SCREENSHOT RECEIVED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{user_pending['username']}
+  • Plan: {user_pending['plan_name']}
+  • Amount: ₹{user_pending['amount']:.0f}
+│
+└─
+
+📌 Check the photo above for payment screenshot."""
+    
+    await context.bot.send_message(
+        chat_id=config.LOGGER_GROUP_ID,
+        text=logger_text
+    )
 
 
 async def go_back_to_menu(update, context):
@@ -952,72 +1078,25 @@ async def handle_payment_callback(update, context):
         await show_payment(update, context, plan_days)
         return
     
-    # I've Paid button - NEW PAYMENT REQUEST
-    if data.startswith("paid_"):
+    # Screenshot button - Show instructions
+    if data.startswith("screenshot_"):
         payment_id = data.split("_")[1]
-        print(f"💰 Payment clicked: {payment_id}")
         
-        if payment_id in user_manager.pending:
-            payment = user_manager.pending[payment_id]
-            
-            if payment.get("status") == "pending":
-                # Send waiting message to user
-                try:
-                    try:
-                        await query.message.delete()
-                    except:
-                        pass
-                    
-                    await query.message.reply_text(
-                        text=f"""{format_waiting("⏳ Payment Submitted!")}
+        await query.message.edit_text(
+            f"""{format_info("📸 Upload Payment Screenshot")}
 
-┌─ 📤 WAITING FOR OWNER APPROVAL
+┌─ 📤 INSTRUCTIONS
 │
-  • Payment ID: `{payment_id}`
-  • Status: ⏳ Waiting for owner approval
-│
-├─ 📋 WHAT HAPPENS NEXT
-│  1. ✅ Owner has been notified
-│  2. 👀 Owner will verify your payment
-│  3. 🔔 You will be notified when approved
+  1. Take a screenshot of your payment
+  2. Send it as a photo in this chat
+  3. The screenshot will be sent to owner
+  4. Owner will verify and approve your payment
 │
 └─
 
-⏱️ Please wait for owner to approve your payment.
-📢 This usually takes a few minutes to 1 hour."""
-                    )
-                except Exception as e:
-                    print(f"Error sending waiting message: {e}")
-                
-                # Send to logger group with QR code
-                qr_path = "qr.jpg"
-                
-                logger_text = f"""
-┌─ 💳 NEW PAYMENT REQUEST
-│
-  • Payment ID: `{payment_id}`
-  • User: @{payment['username']}
-  • User ID: {payment['user_id']}
-  • Plan: {payment['plan_name']}
-  • Amount: ₹{payment['amount']:.0f}
-  • Time: {datetime.fromtimestamp(payment['timestamp']).strftime('%Y-%m-%d %H:%M:%S')}
-│
-├─ 📋 ACTIONS
-│  Use these commands in bot:
-│  /approve {payment_id} - ✅ Approve Payment
-│  /reject {payment_id} - ❌ Reject Payment
-│
-└─
-
-⏳ Waiting for owner approval..."""
-                
-                # Send to logger group
-                await send_to_logger_group(context, logger_text, qr_path)
-                
-                # 🔔 SEND NOTIFICATION TO OWNER WITH BUTTONS
-                await notify_owner(context, payment_id, payment)
-                
-                return
+📌 Please send your payment screenshot now."""
+        )
+        return
     
     # Approve payment from owner callback
     if data.startswith("approve_"):
@@ -1053,8 +1132,8 @@ async def handle_payment_callback(update, context):
                 
                 # Update owner message
                 try:
-                    await query.message.edit_text(
-                        text=f"""✅ **PAYMENT APPROVED SUCCESSFULLY**
+                    await query.message.edit_caption(
+                        caption=f"""✅ **PAYMENT APPROVED SUCCESSFULLY**
 
 ┌─ ✅ APPROVED
 │
@@ -1068,12 +1147,28 @@ async def handle_payment_callback(update, context):
 ✅ User has been activated successfully!"""
                     )
                 except Exception as e:
-                    print(f"Error updating owner message: {e}")
+                    try:
+                        await query.message.edit_text(
+                            text=f"""✅ **PAYMENT APPROVED SUCCESSFULLY**
+
+┌─ ✅ APPROVED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • Plan: {plan_name}
+  • Amount: ₹{payment['amount']:.0f}
+│
+└─
+
+✅ User has been activated successfully!"""
+                        )
+                    except Exception as e2:
+                        print(f"Error updating owner message: {e2}")
                 
                 # Send to logger group
-                await send_to_logger_group(
-                    context,
-                    f"""
+                await context.bot.send_message(
+                    chat_id=config.LOGGER_GROUP_ID,
+                    text=f"""
 ┌─ ✅ PAYMENT APPROVED ✅
 │
   • Payment ID: `{payment_id}`
@@ -1123,8 +1218,8 @@ async def handle_payment_callback(update, context):
                 
                 # Update owner message
                 try:
-                    await query.message.edit_text(
-                        text=f"""❌ **PAYMENT REJECTED**
+                    await query.message.edit_caption(
+                        caption=f"""❌ **PAYMENT REJECTED**
 
 ┌─ ❌ REJECTED
 │
@@ -1138,12 +1233,28 @@ async def handle_payment_callback(update, context):
 ✅ Payment has been rejected."""
                     )
                 except Exception as e:
-                    print(f"Error updating owner message: {e}")
+                    try:
+                        await query.message.edit_text(
+                            text=f"""❌ **PAYMENT REJECTED**
+
+┌─ ❌ REJECTED
+│
+  • Payment ID: `{payment_id}`
+  • User: @{payment['username']}
+  • Plan: {payment['plan_name']}
+  • Amount: ₹{payment['amount']:.0f}
+│
+└─
+
+✅ Payment has been rejected."""
+                        )
+                    except Exception as e2:
+                        print(f"Error updating owner message: {e2}")
                 
                 # Send to logger group
-                await send_to_logger_group(
-                    context,
-                    f"""
+                await context.bot.send_message(
+                    chat_id=config.LOGGER_GROUP_ID,
+                    text=f"""
 ┌─ ❌ PAYMENT REJECTED ❌
 │
   • Payment ID: `{payment_id}`
@@ -1572,6 +1683,7 @@ async def show_about(update, context):
   • User management
   • Sudo users
   • Unlimited plans
+  • Screenshot verification
   • Logger group integration
   • Owner notifications
 │
@@ -1849,9 +1961,9 @@ async def add_sudo_command(update, context):
     except:
         pass
     
-    await send_to_logger_group(
-        context,
-        f"""
+    await context.bot.send_message(
+        chat_id=config.LOGGER_GROUP_ID,
+        text=f"""
 ┌─ 👑 NEW SUDO USER ADDED
 │
   • User ID: {user_id}
@@ -1937,9 +2049,9 @@ async def remove_sudo_command(update, context):
     except:
         pass
     
-    await send_to_logger_group(
-        context,
-        f"""
+    await context.bot.send_message(
+        chat_id=config.LOGGER_GROUP_ID,
+        text=f"""
 ┌─ 🔒 SUDO USER REMOVED
 │
   • User ID: {user_id}
@@ -2110,9 +2222,9 @@ async def approve_command(update, context):
         print(f"Failed to notify user: {e}")
     
     # Send to logger group
-    await send_to_logger_group(
-        context,
-        f"""
+    await context.bot.send_message(
+        chat_id=config.LOGGER_GROUP_ID,
+        text=f"""
 ┌─ ✅ PAYMENT APPROVED ✅
 │
   • Payment ID: `{payment_id}`
@@ -2203,9 +2315,9 @@ async def reject_command(update, context):
         print(f"Failed to notify user: {e}")
     
     # Send to logger group
-    await send_to_logger_group(
-        context,
-        f"""
+    await context.bot.send_message(
+        chat_id=config.LOGGER_GROUP_ID,
+        text=f"""
 ┌─ ❌ PAYMENT REJECTED ❌
 │
   • Payment ID: `{payment_id}`
@@ -2948,6 +3060,12 @@ def main():
     application.add_handler(CommandHandler("addsudo", add_sudo_command))
     application.add_handler(CommandHandler("rmsudo", remove_sudo_command))
     application.add_handler(CommandHandler("sudolist", sudo_list_command))
+    
+    # Screenshot handler - IMPORTANT: This must be added BEFORE callback query handler
+    application.add_handler(CommandHandler("start", start_command))  # Already added
+    # Add message handler for photos
+    from telegram.ext import MessageHandler, filters
+    application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
     
     # Callback query handler
     application.add_handler(CallbackQueryHandler(handle_payment_callback))
