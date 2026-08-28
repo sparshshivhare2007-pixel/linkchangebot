@@ -21,12 +21,12 @@ TARGET_FILE = "target.json"
 USERNAMES_FILE = "usernames.txt"
 
 # Bot Links (for inline buttons)
-OWNER_LINK = os.getenv("OWNER_LINK", "https://t.me/yourowner")
+OWNER_LINK = os.getenv("OWNER_LINK", "https://t.me/oyeeee")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "https://t.me/yourchannel")
 SUPPORT_LINK = os.getenv("SUPPORT_LINK", "https://t.me/yoursupport")
 
 # Start Image URL
-START_IMAGE_URL = os.getenv("START_IMAGE_URL", "https://telegra.ph/file/your-image-url-here.jpg")
+START_IMAGE_URL = os.getenv("START_IMAGE_URL", "https://files.catbox.moe/rbalef.jpg")
 
 # Validate required variables
 if not API_ID:
@@ -49,3 +49,4 @@ print(f"📊 Logger Group ID: {LOGGER_GROUP_ID}")
 print(f"👑 Owner ID: {OWNER_ID}")
 print(f"🔗 Channel Link: {CHANNEL_LINK}")
 print(f"🆘 Support Link: {SUPPORT_LINK}")
+print(f"🖼️ Start Image URL: {START_IMAGE_URL}")

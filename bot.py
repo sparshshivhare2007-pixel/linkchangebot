@@ -333,7 +333,7 @@ You are not authorized to use this bot.
 
 ┌─ CONTACT OWNER
 │
-  • Owner: @oye_se
+  • Owner: @oyeeee
   • Click below to contact the owner
   • Ask for approval to use this bot
 └─"""
@@ -373,7 +373,7 @@ You are not authorized to use this bot!
 
 ┌─ CONTACT OWNER
 │
-  • Owner: @oye_se
+  • Owner: @oyeeee
   • Click below to request access
 └─"""
 
@@ -871,13 +871,13 @@ async def mystatus_command(update, context):
   • Status: {status_text}
 └─
 
-💡 If not approved, contact @oye_se"""
+💡 If not approved, contact @oyeeee"""
     
     await update.message.reply_text(text)
 
 
 # ============================================================
-# CALLBACK HANDLER FOR INLINE BUTTONS
+# CALLBACK HANDLER FOR INLINE BUTTONS (NO MARKDOWN)
 # ============================================================
 
 async def button_callback(update, context):
@@ -889,127 +889,145 @@ async def button_callback(update, context):
 
     if data == "help":
         help_text = """
-❓ **How Link Changer Bot Works**
+❓ How Link Changer Bot Works
 
-🤖 **What is this bot?**
+🤖 What is this bot?
 This bot automatically rotates usernames for your Telegram channels.
 
-⚙️ **How it works:**
-1. **Connect Session** - Connect your Telegram account
-2. **Set Target** - Choose a channel to rotate usernames
-3. **Add Usernames** - Add list of usernames to rotate
-4. **Start Rotation** - Bot will automatically change usernames
+⚙️ How it works:
+1. Connect Session - Connect your Telegram account
+2. Set Target - Choose a channel to rotate usernames
+3. Add Usernames - Add list of usernames to rotate
+4. Start Rotation - Bot will automatically change usernames
 
-📋 **Commands:**
-• /connect - Connect your Telegram session
-• /addchannel - Set target channel
-• /addgroup - Set target group (not supported for username changes)
-• /addusername - Add usernames to rotate
-• /done - Finalize username list
-• /setdelay - Set rotation delay (e.g., /setdelay 20min)
-• /forcestart - Start automatic rotation
-• /forcestop - Stop rotation
-• /change_now - Change username immediately
-• /status - Check system status
-• /list - View all usernames
-• /clear - Clear all usernames
-• /current - View current target
+📋 Commands:
+/connect - Connect your Telegram session
+/addchannel - Set target channel
+/addgroup - Set target group (not supported for username changes)
+/addusername - Add usernames to rotate
+/done - Finalize username list
+/setdelay - Set rotation delay (e.g., /setdelay 20min)
+/forcestart - Start automatic rotation
+/forcestop - Stop rotation
+/change_now - Change username immediately
+/status - Check system status
+/list - View all usernames
+/clear - Clear all usernames
+/current - View current target
 
-🔐 **Important:**
+🔐 Important:
 • Only channel owners/admins can change usernames
 • Telegram has rate limits (FloodWait)
 • Groups do NOT support username changes via API
 
-💡 **Tip:** Use /status to monitor the rotation progress!
+💡 Tip: Use /status to monitor the rotation progress!
 """
-        await query.edit_message_text(
-            help_text,
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text(help_text)
         
         # Add back button
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
         await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
 
     elif data == "back_to_start":
-        await send_start_message(query.message, query)
+        first_name = query.message.chat.first_name or "User"
+
+        caption = f"""
+Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
+
+Link Changer Bot automatically rotates usernames for your channels — from your username list, with customizable delays and full control.
+
+Supported features: Auto-rotation, Custom delays, Channel management, Username lists and more.
+
+Use the buttons below to add Link Changer Bot to your channel, or explore everything it can do."""
+
+        keyboard = [
+            [
+                InlineKeyboardButton("👨‍💻 Developer", callback_data="developer"),
+                InlineKeyboardButton("📢 Channel", callback_data="channel"),
+            ],
+            [
+                InlineKeyboardButton("🆘 Support", callback_data="support"),
+                InlineKeyboardButton("❓ Help", callback_data="help"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(caption, reply_markup=reply_markup)
 
     elif data == "developer":
-        dev_text = f"""
-👨‍💻 **Developer**
+        # DIRECT LINK - Opens owner profile
+        dev_text = """
+👨‍💻 Developer
 
-**Owner:** @oye_se
+Owner: @oyeeee
 
-📌 **Contact:**
-• **Telegram:** [Click to Chat](tg://user?id={config.OWNER_ID})
+Contact:
+• Click the button below to chat with owner
 
----
-_Made with ❤️ for Telegram community_
+Made with ❤️ for Telegram community
 """
-        await query.edit_message_text(
-            dev_text,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("📩 Contact Owner", url=f"tg://user?id={config.OWNER_ID}")],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
+        ]
+        await query.edit_message_text(dev_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "channel":
+        # DIRECT LINK - Opens channel
         channel_text = """
-📢 **Official Channel**
+📢 Official Channel
 
-🔔 **Join for Updates!**
+🔔 Join for Updates!
 
 • ✨ New features
 • 🐛 Bug fixes
 • 📚 Tutorials
 • 💡 Tips & tricks
 
----
-👉 **[Click Here to Join](https://t.me/yourchannel)**
+Click the button below to join our channel!
 """
-        await query.edit_message_text(
-            channel_text,
-            parse_mode='Markdown',
-            disable_web_page_preview=True
-        )
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("📢 Join Channel", url=config.CHANNEL_LINK)],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
+        ]
+        await query.edit_message_text(channel_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "support":
+        # DIRECT LINK - Opens support
         support_text = """
-❓ **Support Center**
+❓ Support Center
 
-🆘 **Need Help?**
+🆘 Need Help?
 
-📖 **Quick Guide:**
-• `/connect` - Connect session
-• `/addchannel` - Set channel target
-• `/addusername` - Add usernames
-• `/forcestart` - Start rotation
-• `/status` - Check status
+📖 Quick Guide:
+/connect - Connect session
+/addchannel - Set channel target
+/addusername - Add usernames
+/forcestart - Start rotation
+/status - Check status
 
-📩 **Contact Support:**
-• **Telegram:** @yoursupport
+📩 Contact Support:
+Click the button below to contact support
 
----
-_We reply within 24 hours!_
+We reply within 24 hours!
 """
-        await query.edit_message_text(
-            support_text,
-            parse_mode='Markdown'
-        )
-        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("📩 Contact Support", url=config.SUPPORT_LINK)],
+            [InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]
+        ]
+        await query.edit_message_text(support_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # ============================================================
-# SEND START MESSAGE FUNCTION
+# COMMAND HANDLERS
 # ============================================================
 
-async def send_start_message(message_obj, query=None):
-    """Send the start message with image and buttons."""
-    first_name = message_obj.chat.first_name or "User"
+async def start_command(update, context):
+    """Start command with authorization check."""
+    if not await authorized_only(update):
+        return
+
+    first_name = update.effective_user.first_name or "User"
 
     caption = f"""
 Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
@@ -1020,7 +1038,6 @@ Supported features: Auto-rotation, Custom delays, Channel management, Username l
 
 Use the buttons below to add Link Changer Bot to your channel, or explore everything it can do."""
 
-    # 4 Inline Buttons
     keyboard = [
         [
             InlineKeyboardButton("👨‍💻 Developer", callback_data="developer"),
@@ -1035,31 +1052,11 @@ Use the buttons below to add Link Changer Bot to your channel, or explore everyt
 
     image_url = "https://files.catbox.moe/rbalef.jpg"
 
-    if query:
-        # Edit message for back button
-        await query.edit_message_text(
-            caption,
-            reply_markup=reply_markup
-        )
-    else:
-        # Send new message
-        await message_obj.reply_photo(
-            photo=image_url,
-            caption=caption,
-            reply_markup=reply_markup
-        )
-
-
-# ============================================================
-# COMMAND HANDLERS
-# ============================================================
-
-async def start_command(update, context):
-    """Start command with authorization check."""
-    if not await authorized_only(update):
-        return
-
-    await send_start_message(update.message)
+    await update.message.reply_photo(
+        photo=image_url,
+        caption=caption,
+        reply_markup=reply_markup
+    )
 
 
 async def connect_command(update, context):
