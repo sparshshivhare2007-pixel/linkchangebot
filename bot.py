@@ -877,7 +877,7 @@ async def mystatus_command(update, context):
 
 
 # ============================================================
-# CALLBACK HANDLER FOR INLINE BUTTONS
+# CALLBACK HANDLER FOR INLINE BUTTONS (FIXED - No "No text to edit" error)
 # ============================================================
 
 async def button_callback(update, context):
@@ -922,13 +922,21 @@ This bot automatically rotates usernames for your Telegram channels.
 
 💡 Tip: Use /status to monitor the rotation progress!
 """
-        await query.edit_message_text(help_text)
+        # Delete the original photo message
+        await query.message.delete()
+        
+        # Send help message as new text message
+        await query.message.reply_text(help_text)
         
         # Add back button
         keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text("🔙 Click below to go back:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "back_to_start":
+        # Delete the help message
+        await query.message.delete()
+        
+        # Send new start message with image
         caption = """
 Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
 
@@ -949,8 +957,14 @@ Use the buttons below to add Link Changer Bot to your channel, or explore everyt
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(caption, reply_markup=reply_markup)
+
+        image_url = "https://files.catbox.moe/rbalef.jpg"
+
+        await query.message.reply_photo(
+            photo=image_url,
+            caption=caption,
+            reply_markup=reply_markup
+        )
 
 
 # ============================================================
