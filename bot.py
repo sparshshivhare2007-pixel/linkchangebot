@@ -19,6 +19,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
+    CallbackQueryHandler,
     ContextTypes,
 )
 
@@ -37,20 +38,6 @@ def format_header(title: str, emoji: str = "🤖") -> str:
 │ {emoji}  {title}  │
 └{border}┘
 """
-
-
-def format_section(title: str, content: str, emoji: str = "📌") -> str:
-    """Create a formatted section with title and content."""
-    return f"""
-┌─ {emoji} {title}
-│
-{content}
-└─"""
-
-
-def format_key_value(key: str, value: str, emoji: str = "•") -> str:
-    """Format a key-value pair with proper alignment."""
-    return f"  {emoji} {key}: {value}"
 
 
 def format_success(message: str) -> str:
@@ -84,22 +71,6 @@ def format_status(status: str, is_good: bool = True) -> str:
     """Format a status indicator."""
     icon = "🟢" if is_good else "🔴"
     return f"{icon} {status}"
-
-
-def format_list(items: list, title: str = "LIST") -> str:
-    """Format a list of items with numbering."""
-    if not items:
-        return "📭 Empty"
-    
-    lines = []
-    for i, item in enumerate(items, 1):
-        lines.append(f"  {i}. {item}")
-    
-    return f"""
-┌─ 📋 {title}
-│
-{chr(10).join(lines)}
-└─"""
 
 
 def format_delay(seconds: int) -> str:
@@ -184,11 +155,9 @@ def parse_approve_time(time_str: str) -> Optional[int]:
     """Parse approval time string and return seconds."""
     time_str = time_str.lower().strip()
     
-    # Check for unlimited
-    if time_str in ["unlimited", "∞", "infinite", "forever", "permanent"]:
-        return -1  # -1 means unlimited
+    if time_str in ["unlimited", "infinite", "forever", "permanent"]:
+        return -1
     
-    # Patterns for time parsing
     patterns = [
         (r"(\d+)\s*day", 86400),
         (r"(\d+)\s*days", 86400),
@@ -218,7 +187,7 @@ def parse_approve_time(time_str: str) -> Optional[int]:
 def is_user_approved(user_id: int) -> bool:
     """Check if user is approved and not expired."""
     if user_id == config.OWNER_ID:
-        return True  # Owner is always approved
+        return True
     
     approved_data = load_approved_users()
     user_data = approved_data.get(str(user_id))
@@ -226,11 +195,9 @@ def is_user_approved(user_id: int) -> bool:
     if not user_data:
         return False
     
-    # Check if unlimited
     if user_data.get("unlimited", False):
         return True
     
-    # Check expiration
     expiry = user_data.get("expiry")
     if not expiry:
         return False
@@ -266,13 +233,12 @@ def approve_user(user_id: int, time_str: str) -> Dict:
     approved_data = load_approved_users()
     user_id_str = str(user_id)
     
-    # Parse time
     seconds = parse_approve_time(time_str)
     
     if seconds is None:
         return {"success": False, "message": "Invalid time format!"}
     
-    if seconds == -1:  # Unlimited
+    if seconds == -1:
         approved_data[user_id_str] = {
             "unlimited": True,
             "expiry": None,
@@ -285,7 +251,6 @@ def approve_user(user_id: int, time_str: str) -> Dict:
             "duration": "unlimited"
         }
     
-    # Calculate expiry
     expiry_time = datetime.now() + timedelta(seconds=seconds)
     approved_data[user_id_str] = {
         "unlimited": False,
@@ -366,7 +331,7 @@ async def owner_only(update):
 │
 You are not authorized to use this bot.
 
-┌─ 👑 CONTACT OWNER
+┌─ CONTACT OWNER
 │
   • Owner: @oyeeee
   • Click below to contact the owner
@@ -400,13 +365,13 @@ async def authorized_only(update):
 │
 You are not authorized to use this bot!
 
-┌─ ℹ️ YOUR INFO
+┌─ YOUR INFO
 │
   • User: {username}
   • ID: {user_id}
   • Status: Not Approved
 
-┌─ 👑 CONTACT OWNER
+┌─ CONTACT OWNER
 │
   • Owner: @oyeeee
   • Click below to request access
@@ -472,17 +437,17 @@ async def load_entity_cache():
     try:
         dialogs = await client.get_dialogs()
         entity_cache_loaded = True
-        print(f"✅ Entity cache loaded with {len(dialogs)} dialogs.")
+        print(f"Entity cache loaded with {len(dialogs)} dialogs.")
         
         target_id = target_data.get("target_id")
         if target_id:
             try:
                 await client.get_entity(target_id)
-                print(f"✅ Target entity {target_id} found in cache.")
+                print(f"Target entity {target_id} found in cache.")
             except Exception as e:
-                print(f"⚠️ Target entity {target_id} not found in cache: {e}")
+                print(f"Target entity {target_id} not found in cache: {e}")
     except Exception as e:
-        print(f"⚠️ Failed to load entity cache: {e}")
+        print(f"Failed to load entity cache: {e}")
 
 
 async def ensure_client():
@@ -514,7 +479,7 @@ def parse_delay(text):
     if not matches:
         raise ValueError(
             "Invalid delay format.\n\n"
-            "• Examples:\n"
+            "Examples:\n"
             "  /setdelay 20min\n"
             "  /setdelay 1hour\n"
             "  /setdelay 30sec\n"
@@ -655,7 +620,7 @@ async def change_username(username):
 async def rotation_loop():
     global current_index
 
-    print("🔄 Rotation started.")
+    print("Rotation started.")
 
     while True:
         if not usernames:
@@ -673,11 +638,11 @@ async def rotation_loop():
         success, result = await change_username(username)
 
         if success:
-            print(f"✅ Username changed: @{result}")
+            print(f"Username changed: @{result}")
             current_index = (current_index + 1) % len(usernames)
             await asyncio.sleep(delay_seconds)
         else:
-            print(f"❌ Username change failed: {result}")
+            print(f"Username change failed: {result}")
 
             if "FloodWait" in result:
                 match = re.search(r"(\d+)\s+seconds", result)
@@ -688,7 +653,7 @@ async def rotation_loop():
 
             await asyncio.sleep(max(delay_seconds, 60))
 
-    print("⏹️ Rotation stopped.")
+    print("Rotation stopped.")
 
 
 # ============================================================
@@ -704,11 +669,11 @@ async def approve_command(update, context):
         await update.message.reply_text(
             f"""{format_error("Invalid Usage")}
 
-┌─ 📖 USAGE
+┌─ USAGE
 │
   /approve <user_id_or_username> <time>
 
-┌─ ⏱️ TIME FORMATS
+┌─ TIME FORMATS
 │
   • 1day, 30day
   • 1hour, 2hours
@@ -716,12 +681,11 @@ async def approve_command(update, context):
   • 1sec, 60sec
   • unlimited, permanent
 
-┌─ 📝 EXAMPLES
+┌─ EXAMPLES
 │
   • /approve 123456789 1day
   • /approve @username 30min
   • /approve 123456789 unlimited
-  • /approve @user 2hours
 └─"""
         )
         return
@@ -729,15 +693,11 @@ async def approve_command(update, context):
     user_identifier = context.args[0]
     time_str = " ".join(context.args[1:])
 
-    # Try to get user ID
     user_id = None
-    username = None
     
     try:
-        # If it's a username (starts with @)
         if user_identifier.startswith("@"):
             username = user_identifier[1:]
-            # Try to resolve username
             tg = await ensure_client()
             if tg:
                 try:
@@ -746,7 +706,6 @@ async def approve_command(update, context):
                 except:
                     pass
         
-        # If it's a numeric ID
         if not user_id:
             user_id = int(user_identifier)
             
@@ -758,25 +717,23 @@ async def approve_command(update, context):
 
     if not user_id:
         await update.message.reply_text(
-            format_error("Could not resolve user. Make sure the username is correct.")
+            format_error("Could not resolve user.")
         )
         return
 
-    # Check if trying to approve owner
     if user_id == config.OWNER_ID:
         await update.message.reply_text(
-            format_info("Owner is always approved! No need to approve.")
+            format_info("Owner is always approved!")
         )
         return
 
-    # Approve the user
     result = approve_user(user_id, time_str)
     
     if result["success"]:
         await update.message.reply_text(
             f"""{format_success("User Approved")}
 
-┌─ 👤 USER INFO
+┌─ USER INFO
 │
   • User ID: {user_id}
   • Duration: {result.get('duration', 'N/A')}
@@ -806,7 +763,7 @@ async def revoke_command(update, context):
         user_id = int(context.args[0])
     except ValueError:
         await update.message.reply_text(
-            format_error("Invalid user ID. Please provide a numeric ID.")
+            format_error("Invalid user ID.")
         )
         return
 
@@ -820,7 +777,7 @@ async def revoke_command(update, context):
         await update.message.reply_text(
             f"""{format_success("Access Revoked")}
 
-┌─ 👤 USER
+┌─ USER
 │
   • User ID: {user_id}
   • Status: Revoked
@@ -866,7 +823,7 @@ async def approved_list_command(update, context):
         
         lines.append(f"  • ID: {user_id} | {status}")
 
-    text = f"""{format_header("Approved Users List", "👥")}
+    text = f"""👥 Approved Users List
 
 {chr(10).join(lines)}
 
@@ -905,9 +862,9 @@ async def mystatus_command(update, context):
     else:
         status_text = "❌ Not Approved"
 
-    text = f"""{format_header("Your Status", "📊")}
+    text = f"""📊 Your Status
 
-┌─ 👤 USER INFO
+┌─ USER INFO
 │
   • ID: {user_id}
   • Username: {username}
@@ -920,71 +877,189 @@ async def mystatus_command(update, context):
 
 
 # ============================================================
-# COMMAND HANDLERS
+# CALLBACK HANDLER FOR INLINE BUTTONS
 # ============================================================
 
-async def start_command(update, context):
-    if not await authorized_only(update):
-        return
+async def button_callback(update, context):
+    """Handle inline button callbacks."""
+    query = update.callback_query
+    await query.answer()
 
-    first_name = update.effective_user.first_name or "User"
+    data = query.data
 
-    # SIMPLE CAPTION - NO MARKDOWN FORMATTING
+    if data == "help":
+        help_text = """
+❓ **How Link Changer Bot Works**
+
+🤖 **What is this bot?**
+This bot automatically rotates usernames for your Telegram channels.
+
+⚙️ **How it works:**
+1. **Connect Session** - Connect your Telegram account
+2. **Set Target** - Choose a channel to rotate usernames
+3. **Add Usernames** - Add list of usernames to rotate
+4. **Start Rotation** - Bot will automatically change usernames
+
+📋 **Commands:**
+• /connect - Connect your Telegram session
+• /addchannel - Set target channel
+• /addgroup - Set target group (not supported for username changes)
+• /addusername - Add usernames to rotate
+• /done - Finalize username list
+• /setdelay - Set rotation delay (e.g., /setdelay 20min)
+• /forcestart - Start automatic rotation
+• /forcestop - Stop rotation
+• /change_now - Change username immediately
+• /status - Check system status
+• /list - View all usernames
+• /clear - Clear all usernames
+• /current - View current target
+
+🔐 **Important:**
+• Only channel owners/admins can change usernames
+• Telegram has rate limits (FloodWait)
+• Groups do NOT support username changes via API
+
+💡 **Tip:** Use /status to monitor the rotation progress!
+"""
+        await query.edit_message_text(
+            help_text,
+            parse_mode='Markdown'
+        )
+        
+        # Add back button
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+
+    elif data == "back_to_start":
+        await send_start_message(query.message, query)
+
+    elif data == "developer":
+        dev_text = f"""
+👨‍💻 **Developer**
+
+**Owner:** @oyeeee
+
+📌 **Contact:**
+• **Telegram:** [Click to Chat](tg://user?id={config.OWNER_ID})
+
+---
+_Made with ❤️ for Telegram community_
+"""
+        await query.edit_message_text(
+            dev_text,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+
+    elif data == "channel":
+        channel_text = """
+📢 **Official Channel**
+
+🔔 **Join for Updates!**
+
+• ✨ New features
+• 🐛 Bug fixes
+• 📚 Tutorials
+• 💡 Tips & tricks
+
+---
+👉 **[Click Here to Join](https://t.me/yourchannel)**
+"""
+        await query.edit_message_text(
+            channel_text,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+
+    elif data == "support":
+        support_text = """
+❓ **Support Center**
+
+🆘 **Need Help?**
+
+📖 **Quick Guide:**
+• `/connect` - Connect session
+• `/addchannel` - Set channel target
+• `/addusername` - Add usernames
+• `/forcestart` - Start rotation
+• `/status` - Check status
+
+📩 **Contact Support:**
+• **Telegram:** @yoursupport
+
+---
+_We reply within 24 hours!_
+"""
+        await query.edit_message_text(
+            support_text,
+            parse_mode='Markdown'
+        )
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="back_to_start")]]
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(keyboard))
+
+
+# ============================================================
+# SEND START MESSAGE FUNCTION
+# ============================================================
+
+async def send_start_message(message_obj, query=None):
+    """Send the start message with image and buttons."""
+    first_name = message_obj.chat.first_name or "User"
+
     caption = f"""
-👋 Hey {first_name},
-This is ⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏 !
+Welcome, ⏤͟͞ 𝙎𝙋𝘼𝙍𝙎𝙃 𝘽𝘼𝙉𝙄𝙔𝘼! 👋
 
-🔄 A powerful username rotation bot with some awesome and useful features.
+Link Changer Bot automatically rotates usernames for your channels — from your username list, with customizable delays and full control.
 
-ℹ️ Click on the help button for more info.
+Supported features: Auto-rotation, Custom delays, Channel management, Username lists and more.
 
-🚀 COMMANDS:
+Use the buttons below to add Link Changer Bot to your channel, or explore everything it can do."""
 
-🔐 SESSION
-  /connect <session>
-
-🎯 TARGET
-  /addchannel <link>
-  /addgroup <link>
-
-📝 USERNAMES
-  /addusername @name1, @name2
-  /done
-  /setdelay 20min
-
-⚙️ CONTROL
-  /forcestart
-  /forcestop
-  /change_now
-
-📊 INFO
-  /status
-  /list
-  /clear
-  /current
-  /mystatus
-
-💡 Tip: Use /status to check current configuration"""
-
+    # 4 Inline Buttons
     keyboard = [
         [
-            InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
-            InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
+            InlineKeyboardButton("👨‍💻 Developer", callback_data="developer"),
+            InlineKeyboardButton("📢 Channel", callback_data="channel"),
         ],
         [
-            InlineKeyboardButton("🆘 Help", url=config.SUPPORT_LINK),
+            InlineKeyboardButton("🆘 Support", callback_data="support"),
+            InlineKeyboardButton("❓ Help", callback_data="help"),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     image_url = "https://files.catbox.moe/rbalef.jpg"
 
-    # NO parse_mode parameter - this avoids the error
-    await update.message.reply_photo(
-        photo=image_url,
-        caption=caption,
-        reply_markup=reply_markup
-    )
+    if query:
+        # Edit message for back button
+        await query.edit_message_text(
+            caption,
+            reply_markup=reply_markup
+        )
+    else:
+        # Send new message
+        await message_obj.reply_photo(
+            photo=image_url,
+            caption=caption,
+            reply_markup=reply_markup
+        )
+
+
+# ============================================================
+# COMMAND HANDLERS
+# ============================================================
+
+async def start_command(update, context):
+    """Start command with authorization check."""
+    if not await authorized_only(update):
+        return
+
+    await send_start_message(update.message)
 
 
 async def connect_command(update, context):
@@ -1032,7 +1107,7 @@ async def connect_command(update, context):
         await update.message.reply_text(
             f"""{format_success("Session Connected")}
 
-┌─ 👤 ACCOUNT INFO
+┌─ ACCOUNT INFO
 │
   • ID: {me.id}
   • Name: {me.first_name or 'Unknown'}
@@ -1060,14 +1135,14 @@ async def addchannel_command(update, context):
         await update.message.reply_text(
             f"""{format_success("Channel Added")}
 
-┌─ 📺 CHANNEL INFO
+┌─ CHANNEL INFO
 │
   • ID: {entity.id}
   • Link: {link}
   • Type: Broadcast Channel
 └─
 
-💡 Ready for username rotation!"""
+Ready for username rotation!"""
         )
 
     except Exception as e:
@@ -1090,15 +1165,14 @@ async def addgroup_command(update, context):
         await update.message.reply_text(
             f"""{format_success("Group Added")}
 
-┌─ 👥 GROUP INFO
+┌─ GROUP INFO
 │
   • ID: {entity.id}
   • Link: {link}
   • Type: Group
 └─
 
-⚠️ Note: Ordinary groups do not support 
-   username updates via API."""
+Note: Ordinary groups do not support username updates via API."""
         )
 
     except Exception as e:
@@ -1132,14 +1206,14 @@ async def addusername_command(update, context):
     await update.message.reply_text(
         f"""{format_success("Usernames Added")}
 
-┌─ 📝 SUMMARY
+┌─ SUMMARY
 │
   • Added: {added}
   • Skipped (duplicates): {skipped}
   • Total usernames: {len(usernames)}
 └─
 
-💡 Use /list to view all usernames"""
+Use /list to view all usernames"""
     )
 
 
@@ -1154,13 +1228,13 @@ async def done_command(update, context):
     await update.message.reply_text(
         f"""{format_success("Username List Finalized")}
 
-┌─ 📊 STATS
+┌─ STATS
 │
   • Total usernames: {len(usernames)}
   • Status: Ready for rotation
 └─
 
-💡 Use /forcestart to begin rotation"""
+Use /forcestart to begin rotation"""
     )
 
 
@@ -1187,7 +1261,7 @@ async def setdelay_command(update, context):
         await update.message.reply_text(
             f"""{format_success("Delay Updated")}
 
-┌─ ⏱️ NEW DELAY
+┌─ NEW DELAY
 │
   • Value: {format_delay(delay_seconds)}
   • Seconds: {delay_seconds}s
@@ -1233,9 +1307,9 @@ async def forcestart_command(update, context):
     rotation_task = asyncio.create_task(rotation_loop())
 
     await update.message.reply_text(
-        f"""{format_header("🚀 Rotation Started", "🚀")}
+        f"""🚀 Rotation Started
 
-┌─ 📊 CONFIGURATION
+┌─ CONFIGURATION
 │
   • Target ID: {target_data['target_id']}
   • Target Type: {target_data.get('target_type', 'N/A')}
@@ -1244,7 +1318,7 @@ async def forcestart_command(update, context):
   • Starting Index: {current_index + 1}
 └─
 
-💡 Use /status to monitor progress"""
+Use /status to monitor progress"""
     )
 
 
@@ -1264,9 +1338,9 @@ async def forcestop_command(update, context):
         rotation_task = None
 
         await update.message.reply_text(
-            f"""{format_header("⏹️ Rotation Stopped", "⏹️")}
+            f"""⏹️ Rotation Stopped
 
-┌─ ℹ️ STATUS
+┌─ STATUS
 │
   • Rotation has been stopped successfully
   • Current index: {current_index + 1}
@@ -1299,12 +1373,12 @@ async def change_now_command(update, context):
     username = usernames[current_index]
 
     status_msg = await update.message.reply_text(
-        f"""┌─ 🔄 CHANGING USERNAME
+        f"""┌─ CHANGING USERNAME
 │
   • Username: @{username}
   • Index: {current_index + 1}/{len(usernames)}
 └─
-⏳ Please wait..."""
+Please wait..."""
     )
 
     success, result = await change_username(username)
@@ -1314,7 +1388,7 @@ async def change_now_command(update, context):
         await status_msg.edit_text(
             f"""{format_success("Username Changed Successfully")}
 
-┌─ ✅ UPDATE COMPLETE
+┌─ UPDATE COMPLETE
 │
   • New Username: @{result}
   • Next Index: {current_index + 1}/{len(usernames)}
@@ -1324,7 +1398,7 @@ async def change_now_command(update, context):
         await status_msg.edit_text(
             f"""{format_error("Username Change Failed")}
 
-┌─ ❌ ERROR DETAILS
+┌─ ERROR DETAILS
 │
   • Username: @{username}
   • Error: {result}
@@ -1348,26 +1422,26 @@ async def status_command(update, context):
     rotation_status = format_status("Running", running) if running else format_status("Stopped", False)
 
     await update.message.reply_text(
-        f"""{format_header("📊 System Status", "📊")}
+        f"""📊 System Status
 
-┌─ 🔐 SESSION
+┌─ SESSION
 │  {session_status}
 │
-├─ 🎯 TARGET
+├─ TARGET
 │  {target_status}
 │  • ID: {target_data.get('target_id') or 'N/A'}
 │  • Type: {target_data.get('target_type') or 'N/A'}
 │  • Link: {target_data.get('target_link') or 'N/A'}
 │
-├─ 📝 USERNAMES
+├─ USERNAMES
 │  • Count: {len(usernames)}
 │  • Current Index: {current_index + 1}/{len(usernames) if usernames else '0'}
 │  • Next: @{usernames[current_index] if usernames else 'N/A'}
 │
-├─ ⏱️ DELAY
+├─ DELAY
 │  • {format_delay(delay_seconds)}
 │
-└─ 🔄 ROTATION
+└─ ROTATION
    {rotation_status}
    • Task: {'Active' if running else 'Idle'}"""
     )
@@ -1381,7 +1455,7 @@ async def list_command(update, context):
         await update.message.reply_text(
             f"""{format_info("Username List")}
 
-┌─ 📭 EMPTY
+┌─ EMPTY
 │
   • No usernames have been added yet.
   • Use /addusername to add some.
@@ -1397,7 +1471,7 @@ async def list_command(update, context):
         for i, name in enumerate(chunk, 1):
             formatted_list.append(f"  {i + (idx-1) * chunk_size}. @{name}")
         
-        text = f"""{format_header(f"Username List {idx}/{len(chunks)}", "📋")}
+        text = f"""📋 Username List {idx}/{len(chunks)}
 
 {chr(10).join(formatted_list)}
 """
@@ -1417,7 +1491,7 @@ async def clear_command(update, context):
     await update.message.reply_text(
         f"""{format_success("List Cleared")}
 
-┌─ 🗑️ COMPLETE
+┌─ COMPLETE
 │
   • All usernames have been removed.
   • Current index reset to 0.
@@ -1447,9 +1521,9 @@ async def current_command(update, context):
             pass
 
     await update.message.reply_text(
-        f"""{format_header("🎯 Current Target", "🎯")}
+        f"""🎯 Current Target
 
-┌─ ℹ️ DETAILS
+┌─ DETAILS
 │
   • ID: {target_data.get('target_id')}
   • Type: {target_data.get('target_type')}
@@ -1505,9 +1579,12 @@ def main():
     application.add_handler(CommandHandler("clear", clear_command))
     application.add_handler(CommandHandler("current", current_command))
 
+    # Callback handler for inline buttons
+    application.add_handler(CallbackQueryHandler(button_callback))
+
     application.add_error_handler(error_handler)
 
-    print("🤖 Bot is running... Press Ctrl+C to stop.")
+    print("Bot is running... Press Ctrl+C to stop.")
     application.run_polling()
 
 
