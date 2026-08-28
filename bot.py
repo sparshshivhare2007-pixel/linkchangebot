@@ -929,9 +929,10 @@ async def start_command(update, context):
 
     first_name = update.effective_user.first_name or "User"
 
+    # SIMPLE CAPTION - NO MARKDOWN FORMATTING
     caption = f"""
 👋 Hey {first_name},
-This is **⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏** !
+This is ⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏 !
 
 🔄 A powerful username rotation bot with some awesome and useful features.
 
@@ -978,11 +979,11 @@ This is **⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏** !
 
     image_url = "https://files.catbox.moe/rbalef.jpg"
 
+    # NO parse_mode parameter - this avoids the error
     await update.message.reply_photo(
         photo=image_url,
         caption=caption,
-        reply_markup=reply_markup,
-        parse_mode='Markdown'
+        reply_markup=reply_markup
     )
 
 
