@@ -333,7 +333,7 @@ You are not authorized to use this bot.
 
 ┌─ CONTACT OWNER
 │
-  • Owner: @oyeeee
+  • Owner: @oye_se
   • Click below to contact the owner
   • Ask for approval to use this bot
 └─"""
@@ -373,7 +373,7 @@ You are not authorized to use this bot!
 
 ┌─ CONTACT OWNER
 │
-  • Owner: @oyeeee
+  • Owner: @oye_se
   • Click below to request access
 └─"""
 
@@ -871,7 +871,7 @@ async def mystatus_command(update, context):
   • Status: {status_text}
 └─
 
-💡 If not approved, contact @oyeeee"""
+💡 If not approved, contact @oye_se"""
     
     await update.message.reply_text(text)
 
@@ -938,7 +938,7 @@ This bot automatically rotates usernames for your Telegram channels.
         dev_text = f"""
 👨‍💻 **Developer**
 
-**Owner:** @oyeeee
+**Owner:** @oye_se
 
 📌 **Contact:**
 • **Telegram:** [Click to Chat](tg://user?id={config.OWNER_ID})
