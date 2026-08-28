@@ -21,6 +21,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     CallbackQueryHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
 )
 from telegram.error import RetryAfter
@@ -815,10 +817,9 @@ async def show_payment(update, context, plan_days):
         print(f"Error showing payment: {e}")
 
 
-async def send_to_logger_group(context, payment_id, payment, photo=None, photo_caption=None):
+async def send_to_logger_group(context, payment_id, payment, photo=None):
     """Send payment screenshot to logger group with approve/reject buttons"""
     
-    # Create inline keyboard with approve/reject buttons
     keyboard = [
         [
             InlineKeyboardButton("✅ Approve Payment", callback_data=f"approve_{payment_id}"),
@@ -849,7 +850,6 @@ async def send_to_logger_group(context, payment_id, payment, photo=None, photo_c
     
     try:
         if photo:
-            # Send photo with buttons
             await context.bot.send_photo(
                 chat_id=config.LOGGER_GROUP_ID,
                 photo=photo,
@@ -857,7 +857,6 @@ async def send_to_logger_group(context, payment_id, payment, photo=None, photo_c
                 reply_markup=reply_markup
             )
         else:
-            # Send text message with buttons
             await context.bot.send_message(
                 chat_id=config.LOGGER_GROUP_ID,
                 text=caption,
@@ -985,35 +984,21 @@ async def handle_screenshot(update, context):
 📢 This usually takes a few minutes to 1 hour."""
     )
     
+    # Read the photo file
+    with open(temp_path, "rb") as f:
+        photo_data = f.read()
+    
     # Send to logger group with photo and buttons
-    await send_to_logger_group(context, payment_id, user_pending, open(temp_path, "rb"))
+    await send_to_logger_group(context, payment_id, user_pending, photo_data)
     
     # Send notification to owner with photo and buttons
-    await notify_owner(context, payment_id, user_pending, open(temp_path, "rb"))
+    await notify_owner(context, payment_id, user_pending, photo_data)
     
     # Clean up temp file
     try:
         os.remove(temp_path)
     except:
         pass
-    
-    # Also send to logger group text notification
-    logger_text = f"""
-┌─ 📸 PAYMENT SCREENSHOT RECEIVED
-│
-  • Payment ID: `{payment_id}`
-  • User: @{user_pending['username']}
-  • Plan: {user_pending['plan_name']}
-  • Amount: ₹{user_pending['amount']:.0f}
-│
-└─
-
-📌 Check the photo above for payment screenshot."""
-    
-    await context.bot.send_message(
-        chat_id=config.LOGGER_GROUP_ID,
-        text=logger_text
-    )
 
 
 async def go_back_to_menu(update, context):
@@ -1130,8 +1115,9 @@ async def handle_payment_callback(update, context):
                 except Exception as e:
                     print(f"Failed to notify user: {e}")
                 
-                # Update owner message
+                # Update the message in logger group / owner chat
                 try:
+                    # Try to edit caption if it's a photo
                     await query.message.edit_caption(
                         caption=f"""✅ **PAYMENT APPROVED SUCCESSFULLY**
 
@@ -1148,6 +1134,7 @@ async def handle_payment_callback(update, context):
                     )
                 except Exception as e:
                     try:
+                        # If it's a text message, edit text
                         await query.message.edit_text(
                             text=f"""✅ **PAYMENT APPROVED SUCCESSFULLY**
 
@@ -1163,7 +1150,7 @@ async def handle_payment_callback(update, context):
 ✅ User has been activated successfully!"""
                         )
                     except Exception as e2:
-                        print(f"Error updating owner message: {e2}")
+                        print(f"Error updating message: {e2}")
                 
                 # Send to logger group
                 await context.bot.send_message(
@@ -1216,7 +1203,7 @@ async def handle_payment_callback(update, context):
                 except Exception as e:
                     print(f"Failed to notify user: {e}")
                 
-                # Update owner message
+                # Update the message in logger group / owner chat
                 try:
                     await query.message.edit_caption(
                         caption=f"""❌ **PAYMENT REJECTED**
@@ -1249,7 +1236,7 @@ async def handle_payment_callback(update, context):
 ✅ Payment has been rejected."""
                         )
                     except Exception as e2:
-                        print(f"Error updating owner message: {e2}")
+                        print(f"Error updating message: {e2}")
                 
                 # Send to logger group
                 await context.bot.send_message(
@@ -3061,10 +3048,9 @@ def main():
     application.add_handler(CommandHandler("rmsudo", remove_sudo_command))
     application.add_handler(CommandHandler("sudolist", sudo_list_command))
     
-    # Screenshot handler - IMPORTANT: This must be added BEFORE callback query handler
-    application.add_handler(CommandHandler("start", start_command))  # Already added
-    # Add message handler for photos
-    from telegram.ext import MessageHandler, filters
+    # Screenshot handler - IMPORTANT: This handles photos sent by users
+    application.add_handler(MessageHandler(filters.PHOTO & filters.User(config.OWNER_ID), handle_screenshot))
+    # Also handle photos from any user
     application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
     
     # Callback query handler
