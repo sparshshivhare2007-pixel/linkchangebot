@@ -1063,12 +1063,17 @@ async def handle_payment_callback(update, context):
         await show_payment(update, context, plan_days)
         return
     
-    # Screenshot button - Show instructions
+    # Screenshot button - Send new message with instructions
     if data.startswith("screenshot_"):
         payment_id = data.split("_")[1]
         
-        await query.message.edit_text(
-            f"""{format_info("📸 Upload Payment Screenshot")}
+        # Get the payment details
+        if payment_id in user_manager.pending:
+            payment = user_manager.pending[payment_id]
+            
+            # Send a new message with instructions (don't try to edit the photo)
+            await query.message.reply_text(
+                f"""{format_info("📸 Upload Payment Screenshot")}
 
 ┌─ 📤 INSTRUCTIONS
 │
@@ -1079,8 +1084,15 @@ async def handle_payment_callback(update, context):
 │
 └─
 
-📌 Please send your payment screenshot now."""
-        )
+📌 Please send your payment screenshot now.
+
+💡 Your Payment ID: `{payment_id}`"""
+            )
+            
+            # Also send a small confirmation to show button was clicked
+            await query.message.reply_text(
+                "✅ I'm ready! Please send your payment screenshot now."
+            )
         return
     
     # Approve payment from owner callback
@@ -3048,9 +3060,7 @@ def main():
     application.add_handler(CommandHandler("rmsudo", remove_sudo_command))
     application.add_handler(CommandHandler("sudolist", sudo_list_command))
     
-    # Screenshot handler - IMPORTANT: This handles photos sent by users
-    application.add_handler(MessageHandler(filters.PHOTO & filters.User(config.OWNER_ID), handle_screenshot))
-    # Also handle photos from any user
+    # Screenshot handler - handles photos sent by users
     application.add_handler(MessageHandler(filters.PHOTO, handle_screenshot))
     
     # Callback query handler
