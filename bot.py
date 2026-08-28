@@ -278,6 +278,7 @@ def approve_user(user_id: int, time_str: str) -> Dict:
             "expiry": None,
             "approved_at": datetime.now().isoformat()
         }
+        save_approved_users(approved_data)
         return {
             "success": True, 
             "message": f"User {user_id} approved for UNLIMITED time!",
@@ -941,37 +942,45 @@ async def mystatus_command(update, context):
 # ============================================================
 
 # ============================================================
-# /START - WITH IMAGE AND 3 INLINE BUTTONS
+# /START - WITH IMAGE AND 3 INLINE BUTTONS (STYLISH)
 # ============================================================
 
 async def start_command(update, context):
-    """Start command with authorization check."""
     if not await authorized_only(update):
         return
 
-    # Caption with commands
-    caption = f"""{format_header("Telegram Link Changer Bot", "🤖")}
+    # Get user's first name
+    first_name = update.effective_user.first_name or "User"
+
+    # Stylish caption
+    caption = f"""
+👋 Hey **{first_name}**,
+This is **⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏** !
+
+🔄 A powerful username rotation bot with some awesome and useful features.
+
+***ℹ️ Click on the help button for more info.***
 
 ┌─ 🚀 COMMANDS
 │
-│  🔐 SESSION
+│  🔐 **SESSION**
 │    /connect <session>
 │
-│  🎯 TARGET
+│  🎯 **TARGET**
 │    /addchannel <link>
 │    /addgroup <link>
 │
-│  📝 USERNAMES
+│  📝 **USERNAMES**
 │    /addusername @name1, @name2
 │    /done
 │    /setdelay 20min
 │
-│  ⚙️ CONTROL
+│  ⚙️ **CONTROL**
 │    /forcestart
 │    /forcestop
 │    /change_now
 │
-│  📊 INFO
+│  📊 **INFO**
 │    /status
 │    /list
 │    /clear
@@ -979,16 +988,16 @@ async def start_command(update, context):
 │    /mystatus
 └─
 
-💡 Tip: Use /status to check current configuration"""
+💡 **Tip:** Use /status to check current configuration"""
 
     # 3 Inline Buttons - Developer, Channel, Support
     keyboard = [
         [
-            InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
-            InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
+            InlineKeyboardButton("👨‍💻 𝘿𝙀𝙑𝙀𝙇𝙊𝙋𝙀𝙍", url=f"tg://user?id={config.OWNER_ID}"),
+            InlineKeyboardButton("📢 𝘾𝙃𝘼𝙉𝙉𝙀𝙇", url=config.CHANNEL_LINK),
         ],
         [
-            InlineKeyboardButton("🆘 Support", url=config.SUPPORT_LINK),
+            InlineKeyboardButton("🆘 𝙃𝙀𝙇𝙋", url=config.SUPPORT_LINK),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1000,7 +1009,8 @@ async def start_command(update, context):
     await update.message.reply_photo(
         photo=image_url,
         caption=caption,
-        reply_markup=reply_markup
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
     )
 
 
