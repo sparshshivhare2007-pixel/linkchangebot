@@ -361,8 +361,7 @@ async def owner_only(update):
     """Check if user is owner only."""
     if not is_owner(update):
         if update.message:
-            # Owner contact information with buttons
-            owner_contact = f"""
+            owner_contact = """
 ┌─ ❌ ERROR
 │
 You are not authorized to use this bot.
@@ -392,7 +391,6 @@ async def authorized_only(update):
     """Check if user is owner OR approved user."""
     if not is_authorized(update):
         if update.message:
-            # Get user info
             user = update.effective_user
             user_id = user.id
             username = f"@{user.username}" if user.username else f"ID: {user_id}"
@@ -697,10 +695,6 @@ async def rotation_loop():
 # APPROVAL COMMAND HANDLERS
 # ============================================================
 
-# ============================================================
-# /APPROVE - Owner only command to approve users
-# ============================================================
-
 async def approve_command(update, context):
     """Approve a user to use the bot."""
     if not await owner_only(update):
@@ -797,10 +791,6 @@ async def approve_command(update, context):
         )
 
 
-# ============================================================
-# /REVOKE - Owner only command to revoke user access
-# ============================================================
-
 async def revoke_command(update, context):
     """Revoke a user's access to the bot."""
     if not await owner_only(update):
@@ -844,10 +834,6 @@ async def revoke_command(update, context):
         )
 
 
-# ============================================================
-# /APPROVED - Show all approved users
-# ============================================================
-
 async def approved_list_command(update, context):
     """Show list of all approved users."""
     if not await owner_only(update):
@@ -888,10 +874,6 @@ async def approved_list_command(update, context):
     
     await update.message.reply_text(text)
 
-
-# ============================================================
-# /MYSTATUS - Show user's own approval status
-# ============================================================
 
 async def mystatus_command(update, context):
     """Show user's own approval status."""
@@ -941,71 +923,61 @@ async def mystatus_command(update, context):
 # COMMAND HANDLERS
 # ============================================================
 
-# ============================================================
-# /START - WITH IMAGE AND 3 INLINE BUTTONS (STYLISH)
-# ============================================================
-
 async def start_command(update, context):
     if not await authorized_only(update):
         return
 
-    # Get user's first name
     first_name = update.effective_user.first_name or "User"
 
-    # Stylish caption
     caption = f"""
-👋 Hey **{first_name}**,
+👋 Hey {first_name},
 This is **⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏** !
 
 🔄 A powerful username rotation bot with some awesome and useful features.
 
-***ℹ️ Click on the help button for more info.***
+ℹ️ Click on the help button for more info.
 
-┌─ 🚀 COMMANDS
-│
-│  🔐 **SESSION**
-│    /connect <session>
-│
-│  🎯 **TARGET**
-│    /addchannel <link>
-│    /addgroup <link>
-│
-│  📝 **USERNAMES**
-│    /addusername @name1, @name2
-│    /done
-│    /setdelay 20min
-│
-│  ⚙️ **CONTROL**
-│    /forcestart
-│    /forcestop
-│    /change_now
-│
-│  📊 **INFO**
-│    /status
-│    /list
-│    /clear
-│    /current
-│    /mystatus
-└─
+🚀 COMMANDS:
 
-💡 **Tip:** Use /status to check current configuration"""
+🔐 SESSION
+  /connect <session>
 
-    # 3 Inline Buttons - Developer, Channel, Support
+🎯 TARGET
+  /addchannel <link>
+  /addgroup <link>
+
+📝 USERNAMES
+  /addusername @name1, @name2
+  /done
+  /setdelay 20min
+
+⚙️ CONTROL
+  /forcestart
+  /forcestop
+  /change_now
+
+📊 INFO
+  /status
+  /list
+  /clear
+  /current
+  /mystatus
+
+💡 Tip: Use /status to check current configuration"""
+
     keyboard = [
         [
-            InlineKeyboardButton("👨‍💻 𝘿𝙀𝙑𝙀𝙇𝙊𝙋𝙀𝙍", url=f"tg://user?id={config.OWNER_ID}"),
-            InlineKeyboardButton("📢 𝘾𝙃𝘼𝙉𝙉𝙀𝙇", url=config.CHANNEL_LINK),
+            InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
+            InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
         ],
         [
-            InlineKeyboardButton("🆘 𝙃𝙀𝙇𝙋", url=config.SUPPORT_LINK),
+            InlineKeyboardButton("🆘 Help", url=config.SUPPORT_LINK),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Image URL
     image_url = "https://files.catbox.moe/rbalef.jpg"
 
-    # Send photo with caption and buttons
     await update.message.reply_photo(
         photo=image_url,
         caption=caption,
@@ -1013,10 +985,6 @@ This is **⏤͟͞ 𝙇𝙄𝙉𝙆 𝘾𝙃𝘼𝙉𝙂𝙀𝙍 𝘽𝙊𝙏** !
         parse_mode='Markdown'
     )
 
-
-# ============================================================
-# /CONNECT - Only authorized users can connect
-# ============================================================
 
 async def connect_command(update, context):
     global client, entity_cache_loaded
@@ -1075,10 +1043,6 @@ async def connect_command(update, context):
         await update.message.reply_text(format_error(f"Connection failed:\n{e}"))
 
 
-# ============================================================
-# /ADDCHANNEL
-# ============================================================
-
 async def addchannel_command(update, context):
     if not await authorized_only(update):
         return
@@ -1108,10 +1072,6 @@ async def addchannel_command(update, context):
     except Exception as e:
         await update.message.reply_text(format_error(f"Failed to add channel:\n{e}"))
 
-
-# ============================================================
-# /ADDGROUP
-# ============================================================
 
 async def addgroup_command(update, context):
     if not await authorized_only(update):
@@ -1143,10 +1103,6 @@ async def addgroup_command(update, context):
     except Exception as e:
         await update.message.reply_text(format_error(f"Failed to add group:\n{e}"))
 
-
-# ============================================================
-# /ADDUSERNAME
-# ============================================================
 
 async def addusername_command(update, context):
     global usernames
@@ -1186,10 +1142,6 @@ async def addusername_command(update, context):
     )
 
 
-# ============================================================
-# /DONE
-# ============================================================
-
 async def done_command(update, context):
     global usernames
 
@@ -1210,10 +1162,6 @@ async def done_command(update, context):
 💡 Use /forcestart to begin rotation"""
     )
 
-
-# ============================================================
-# /SETDELAY
-# ============================================================
 
 async def setdelay_command(update, context):
     global delay_seconds
@@ -1248,10 +1196,6 @@ async def setdelay_command(update, context):
     except ValueError as e:
         await update.message.reply_text(format_error(str(e)))
 
-
-# ============================================================
-# /FORCESTART
-# ============================================================
 
 async def forcestart_command(update, context):
     global rotation_task
@@ -1303,10 +1247,6 @@ async def forcestart_command(update, context):
     )
 
 
-# ============================================================
-# /FORCESTOP
-# ============================================================
-
 async def forcestop_command(update, context):
     global rotation_task
 
@@ -1334,10 +1274,6 @@ async def forcestop_command(update, context):
     else:
         await update.message.reply_text(format_info("Rotation is not running."))
 
-
-# ============================================================
-# /CHANGE_NOW
-# ============================================================
 
 async def change_now_command(update, context):
     global current_index
@@ -1395,10 +1331,6 @@ async def change_now_command(update, context):
         )
 
 
-# ============================================================
-# /STATUS
-# ============================================================
-
 async def status_command(update, context):
     if not await authorized_only(update):
         return
@@ -1440,10 +1372,6 @@ async def status_command(update, context):
     )
 
 
-# ============================================================
-# /LIST
-# ============================================================
-
 async def list_command(update, context):
     if not await authorized_only(update):
         return
@@ -1460,7 +1388,6 @@ async def list_command(update, context):
         )
         return
 
-    # Split into chunks to avoid message length limits
     chunk_size = 30
     chunks = [usernames[i:i + chunk_size] for i in range(0, len(usernames), chunk_size)]
     
@@ -1475,10 +1402,6 @@ async def list_command(update, context):
 """
         await update.message.reply_text(text)
 
-
-# ============================================================
-# /CLEAR
-# ============================================================
 
 async def clear_command(update, context):
     global usernames, current_index
@@ -1500,10 +1423,6 @@ async def clear_command(update, context):
 └─"""
     )
 
-
-# ============================================================
-# /CURRENT
-# ============================================================
 
 async def current_command(update, context):
     if not await authorized_only(update):
@@ -1539,10 +1458,6 @@ async def current_command(update, context):
 └─"""
     )
 
-
-# ============================================================
-# ERROR HANDLER
-# ============================================================
 
 async def error_handler(update, context):
     print("Bot error:", context.error)
