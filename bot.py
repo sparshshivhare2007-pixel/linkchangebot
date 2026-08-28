@@ -14,7 +14,7 @@ from telethon.errors import (
     RPCError,
 )
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -465,14 +465,15 @@ async def rotation_loop():
 # ============================================================
 
 # ============================================================
-# /START
+# /START - WITH IMAGE AND 3 INLINE BUTTONS
 # ============================================================
 
 async def start_command(update, context):
     if not await owner_only(update):
         return
 
-    text = f"""{format_header("Telegram Link Changer Bot", "🤖")}
+    # Caption with commands
+    caption = f"""{format_header("Telegram Link Changer Bot", "🤖")}
 
 ┌─ 🚀 COMMANDS
 │
@@ -502,7 +503,27 @@ async def start_command(update, context):
 
 💡 Tip: Use /status to check current configuration"""
 
-    await update.message.reply_text(text)
+    # 3 Inline Buttons - Developer, Channel, Support
+    keyboard = [
+        [
+            InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
+            InlineKeyboardButton("📢 Channel", url="https://t.me/yourchannel"),
+        ],
+        [
+            InlineKeyboardButton("🆘 Support", url="https://t.me/yoursupport"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Image URL (Yahan apni image URL daalein)
+    image_url = "https://files.catbox.moe/rbalef.jpg"
+
+    # Send photo with caption and buttons
+    await update.message.reply_photo(
+        photo=image_url,
+        caption=caption,
+        reply_markup=reply_markup
+    )
 
 
 # ============================================================
