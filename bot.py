@@ -2,7 +2,8 @@ import asyncio
 import json
 import os
 import re
-from typing import Optional
+from typing import Optional, Dict
+from datetime import datetime, timedelta
 from telethon import utils
 from telethon import TelegramClient
 from telethon.sessions import StringSession
@@ -155,6 +156,166 @@ def save_usernames(names):
 
 
 # ============================================================
+# APPROVAL SYSTEM
+# ============================================================
+
+APPROVED_FILE = "approved_users.json"
+
+def load_approved_users():
+    """Load approved users from file."""
+    if not os.path.exists(APPROVED_FILE):
+        save_approved_users({})
+        return {}
+    
+    try:
+        with open(APPROVED_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_approved_users(data):
+    """Save approved users to file."""
+    with open(APPROVED_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
+def parse_approve_time(time_str: str) -> Optional[int]:
+    """Parse approval time string and return seconds."""
+    time_str = time_str.lower().strip()
+    
+    # Check for unlimited
+    if time_str in ["unlimited", "∞", "infinite", "forever", "permanent"]:
+        return -1  # -1 means unlimited
+    
+    # Patterns for time parsing
+    patterns = [
+        (r"(\d+)\s*day", 86400),
+        (r"(\d+)\s*days", 86400),
+        (r"(\d+)\s*hr", 3600),
+        (r"(\d+)\s*hours?", 3600),
+        (r"(\d+)\s*min", 60),
+        (r"(\d+)\s*mins?", 60),
+        (r"(\d+)\s*sec", 1),
+        (r"(\d+)\s*secs?", 1),
+    ]
+    
+    total_seconds = 0
+    matched = False
+    
+    for pattern, multiplier in patterns:
+        matches = re.findall(pattern, time_str)
+        for match in matches:
+            matched = True
+            total_seconds += int(match) * multiplier
+    
+    if not matched:
+        return None
+    
+    return total_seconds
+
+
+def is_user_approved(user_id: int) -> bool:
+    """Check if user is approved and not expired."""
+    if user_id == config.OWNER_ID:
+        return True  # Owner is always approved
+    
+    approved_data = load_approved_users()
+    user_data = approved_data.get(str(user_id))
+    
+    if not user_data:
+        return False
+    
+    # Check if unlimited
+    if user_data.get("unlimited", False):
+        return True
+    
+    # Check expiration
+    expiry = user_data.get("expiry")
+    if not expiry:
+        return False
+    
+    try:
+        expiry_time = datetime.fromisoformat(expiry)
+        return datetime.now() < expiry_time
+    except:
+        return False
+
+
+def get_user_approval_info(user_id: int) -> Dict:
+    """Get user approval information."""
+    if user_id == config.OWNER_ID:
+        return {"approved": True, "unlimited": True, "expiry": None, "is_owner": True}
+    
+    approved_data = load_approved_users()
+    user_data = approved_data.get(str(user_id))
+    
+    if not user_data:
+        return {"approved": False, "unlimited": False, "expiry": None, "is_owner": False}
+    
+    return {
+        "approved": True,
+        "unlimited": user_data.get("unlimited", False),
+        "expiry": user_data.get("expiry"),
+        "is_owner": False
+    }
+
+
+def approve_user(user_id: int, time_str: str) -> Dict:
+    """Approve a user with given time."""
+    approved_data = load_approved_users()
+    user_id_str = str(user_id)
+    
+    # Parse time
+    seconds = parse_approve_time(time_str)
+    
+    if seconds is None:
+        return {"success": False, "message": "Invalid time format!"}
+    
+    if seconds == -1:  # Unlimited
+        approved_data[user_id_str] = {
+            "unlimited": True,
+            "expiry": None,
+            "approved_at": datetime.now().isoformat()
+        }
+        return {
+            "success": True, 
+            "message": f"User {user_id} approved for UNLIMITED time!",
+            "duration": "unlimited"
+        }
+    
+    # Calculate expiry
+    expiry_time = datetime.now() + timedelta(seconds=seconds)
+    approved_data[user_id_str] = {
+        "unlimited": False,
+        "expiry": expiry_time.isoformat(),
+        "approved_at": datetime.now().isoformat(),
+        "duration_seconds": seconds
+    }
+    
+    save_approved_users(approved_data)
+    
+    return {
+        "success": True,
+        "message": f"User {user_id} approved for {format_delay(seconds)}!",
+        "duration": format_delay(seconds),
+        "expiry": expiry_time.isoformat()
+    }
+
+
+def revoke_user(user_id: int) -> bool:
+    """Revoke a user's approval."""
+    approved_data = load_approved_users()
+    user_id_str = str(user_id)
+    
+    if user_id_str in approved_data:
+        del approved_data[user_id_str]
+        save_approved_users(approved_data)
+        return True
+    return False
+
+
+# ============================================================
 # GLOBAL DATA
 # ============================================================
 
@@ -178,7 +339,7 @@ entity_cache_loaded = False
 
 
 # ============================================================
-# OWNER CHECK
+# OWNER CHECK WITH APPROVAL SYSTEM
 # ============================================================
 
 def is_owner(update):
@@ -187,10 +348,81 @@ def is_owner(update):
     return update.effective_user.id == config.OWNER_ID
 
 
+def is_authorized(update):
+    """Check if user is owner OR approved user."""
+    if not update.effective_user:
+        return False
+    user_id = update.effective_user.id
+    return user_id == config.OWNER_ID or is_user_approved(user_id)
+
+
 async def owner_only(update):
+    """Check if user is owner only."""
     if not is_owner(update):
         if update.message:
-            await update.message.reply_text(format_error("You are not authorized to use this bot."))
+            # Owner contact information with buttons
+            owner_contact = f"""
+┌─ ❌ ERROR
+│
+You are not authorized to use this bot.
+
+┌─ 👑 CONTACT OWNER
+│
+  • Owner: @oyeeee
+  • Click below to contact the owner
+  • Ask for approval to use this bot
+└─"""
+
+            keyboard = [
+                [InlineKeyboardButton("📩 Contact Owner", url=f"tg://user?id={config.OWNER_ID}")],
+                [InlineKeyboardButton("📢 Join Channel", url=config.CHANNEL_LINK)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                owner_contact,
+                reply_markup=reply_markup
+            )
+        return False
+    return True
+
+
+async def authorized_only(update):
+    """Check if user is owner OR approved user."""
+    if not is_authorized(update):
+        if update.message:
+            # Get user info
+            user = update.effective_user
+            user_id = user.id
+            username = f"@{user.username}" if user.username else f"ID: {user_id}"
+            
+            owner_contact = f"""
+┌─ ❌ ACCESS DENIED
+│
+You are not authorized to use this bot!
+
+┌─ ℹ️ YOUR INFO
+│
+  • User: {username}
+  • ID: {user_id}
+  • Status: Not Approved
+
+┌─ 👑 CONTACT OWNER
+│
+  • Owner: @oyeeee
+  • Click below to request access
+└─"""
+
+            keyboard = [
+                [InlineKeyboardButton("📩 Request Access", url=f"tg://user?id={config.OWNER_ID}")],
+                [InlineKeyboardButton("📢 Join Channel", url=config.CHANNEL_LINK)]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                owner_contact,
+                reply_markup=reply_markup
+            )
         return False
     return True
 
@@ -461,7 +693,251 @@ async def rotation_loop():
 
 
 # ============================================================
-# COMMAND HANDLERS - WITH ENHANCED UI
+# APPROVAL COMMAND HANDLERS
+# ============================================================
+
+# ============================================================
+# /APPROVE - Owner only command to approve users
+# ============================================================
+
+async def approve_command(update, context):
+    """Approve a user to use the bot."""
+    if not await owner_only(update):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            f"""{format_error("Invalid Usage")}
+
+┌─ 📖 USAGE
+│
+  /approve <user_id_or_username> <time>
+
+┌─ ⏱️ TIME FORMATS
+│
+  • 1day, 30day
+  • 1hour, 2hours
+  • 1min, 30min
+  • 1sec, 60sec
+  • unlimited, permanent
+
+┌─ 📝 EXAMPLES
+│
+  • /approve 123456789 1day
+  • /approve @username 30min
+  • /approve 123456789 unlimited
+  • /approve @user 2hours
+└─"""
+        )
+        return
+
+    user_identifier = context.args[0]
+    time_str = " ".join(context.args[1:])
+
+    # Try to get user ID
+    user_id = None
+    username = None
+    
+    try:
+        # If it's a username (starts with @)
+        if user_identifier.startswith("@"):
+            username = user_identifier[1:]
+            # Try to resolve username
+            tg = await ensure_client()
+            if tg:
+                try:
+                    entity = await tg.get_entity(username)
+                    user_id = entity.id
+                except:
+                    pass
+        
+        # If it's a numeric ID
+        if not user_id:
+            user_id = int(user_identifier)
+            
+    except ValueError:
+        await update.message.reply_text(
+            format_error(f"Invalid user identifier: {user_identifier}")
+        )
+        return
+
+    if not user_id:
+        await update.message.reply_text(
+            format_error("Could not resolve user. Make sure the username is correct.")
+        )
+        return
+
+    # Check if trying to approve owner
+    if user_id == config.OWNER_ID:
+        await update.message.reply_text(
+            format_info("Owner is always approved! No need to approve.")
+        )
+        return
+
+    # Approve the user
+    result = approve_user(user_id, time_str)
+    
+    if result["success"]:
+        await update.message.reply_text(
+            f"""{format_success("User Approved")}
+
+┌─ 👤 USER INFO
+│
+  • User ID: {user_id}
+  • Duration: {result.get('duration', 'N/A')}
+  • Expiry: {result.get('expiry', 'Never')}
+└─
+
+✅ User can now use the bot!"""
+        )
+    else:
+        await update.message.reply_text(
+            format_error(f"Approval failed: {result['message']}")
+        )
+
+
+# ============================================================
+# /REVOKE - Owner only command to revoke user access
+# ============================================================
+
+async def revoke_command(update, context):
+    """Revoke a user's access to the bot."""
+    if not await owner_only(update):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            format_error("Usage: /revoke <user_id>")
+        )
+        return
+
+    try:
+        user_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text(
+            format_error("Invalid user ID. Please provide a numeric ID.")
+        )
+        return
+
+    if user_id == config.OWNER_ID:
+        await update.message.reply_text(
+            format_info("Cannot revoke owner's access!")
+        )
+        return
+
+    if revoke_user(user_id):
+        await update.message.reply_text(
+            f"""{format_success("Access Revoked")}
+
+┌─ 👤 USER
+│
+  • User ID: {user_id}
+  • Status: Revoked
+└─
+
+❌ User can no longer use the bot."""
+        )
+    else:
+        await update.message.reply_text(
+            format_error(f"User {user_id} was not approved.")
+        )
+
+
+# ============================================================
+# /APPROVED - Show all approved users
+# ============================================================
+
+async def approved_list_command(update, context):
+    """Show list of all approved users."""
+    if not await owner_only(update):
+        return
+
+    approved_data = load_approved_users()
+    
+    if not approved_data:
+        await update.message.reply_text(
+            format_info("No users are approved yet.")
+        )
+        return
+
+    lines = []
+    for user_id_str, data in approved_data.items():
+        user_id = int(user_id_str)
+        if data.get("unlimited", False):
+            status = "♾️ Unlimited"
+        else:
+            expiry = data.get("expiry", "Unknown")
+            try:
+                expiry_time = datetime.fromisoformat(expiry)
+                remaining = expiry_time - datetime.now()
+                if remaining.total_seconds() <= 0:
+                    status = "⏰ Expired"
+                else:
+                    status = f"⏳ {format_delay(int(remaining.total_seconds()))} left"
+            except:
+                status = "❓ Unknown"
+        
+        lines.append(f"  • ID: {user_id} | {status}")
+
+    text = f"""{format_header("Approved Users List", "👥")}
+
+{chr(10).join(lines)}
+
+📊 Total: {len(lines)} users"""
+    
+    await update.message.reply_text(text)
+
+
+# ============================================================
+# /MYSTATUS - Show user's own approval status
+# ============================================================
+
+async def mystatus_command(update, context):
+    """Show user's own approval status."""
+    if not update.effective_user:
+        return
+    
+    user = update.effective_user
+    user_id = user.id
+    username = f"@{user.username}" if user.username else "No username"
+    
+    info = get_user_approval_info(user_id)
+    
+    if info["is_owner"]:
+        status_text = "👑 Owner (Full Access)"
+    elif info["approved"]:
+        if info["unlimited"]:
+            status_text = "♾️ Unlimited Access"
+        else:
+            expiry = info["expiry"]
+            try:
+                expiry_time = datetime.fromisoformat(expiry)
+                remaining = expiry_time - datetime.now()
+                if remaining.total_seconds() <= 0:
+                    status_text = "⏰ Expired (Contact Owner)"
+                else:
+                    status_text = f"✅ Approved ({format_delay(int(remaining.total_seconds()))} left)"
+            except:
+                status_text = "✅ Approved"
+    else:
+        status_text = "❌ Not Approved"
+
+    text = f"""{format_header("Your Status", "📊")}
+
+┌─ 👤 USER INFO
+│
+  • ID: {user_id}
+  • Username: {username}
+  • Status: {status_text}
+└─
+
+💡 If not approved, contact @oyeeee"""
+    
+    await update.message.reply_text(text)
+
+
+# ============================================================
+# COMMAND HANDLERS
 # ============================================================
 
 # ============================================================
@@ -469,7 +945,8 @@ async def rotation_loop():
 # ============================================================
 
 async def start_command(update, context):
-    if not await owner_only(update):
+    """Start command with authorization check."""
+    if not await authorized_only(update):
         return
 
     # Caption with commands
@@ -499,6 +976,7 @@ async def start_command(update, context):
 │    /list
 │    /clear
 │    /current
+│    /mystatus
 └─
 
 💡 Tip: Use /status to check current configuration"""
@@ -507,15 +985,15 @@ async def start_command(update, context):
     keyboard = [
         [
             InlineKeyboardButton("👨‍💻 Developer", url=f"tg://user?id={config.OWNER_ID}"),
-            InlineKeyboardButton("📢 Channel", url="https://t.me/yourchannel"),
+            InlineKeyboardButton("📢 Channel", url=config.CHANNEL_LINK),
         ],
         [
-            InlineKeyboardButton("🆘 Support", url="https://t.me/yoursupport"),
+            InlineKeyboardButton("🆘 Support", url=config.SUPPORT_LINK),
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Image URL (Yahan apni image URL daalein)
+    # Image URL
     image_url = "https://files.catbox.moe/rbalef.jpg"
 
     # Send photo with caption and buttons
@@ -527,13 +1005,13 @@ async def start_command(update, context):
 
 
 # ============================================================
-# /CONNECT
+# /CONNECT - Only authorized users can connect
 # ============================================================
 
 async def connect_command(update, context):
     global client, entity_cache_loaded
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not context.args:
@@ -592,7 +1070,7 @@ async def connect_command(update, context):
 # ============================================================
 
 async def addchannel_command(update, context):
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not context.args:
@@ -626,7 +1104,7 @@ async def addchannel_command(update, context):
 # ============================================================
 
 async def addgroup_command(update, context):
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not context.args:
@@ -663,7 +1141,7 @@ async def addgroup_command(update, context):
 async def addusername_command(update, context):
     global usernames
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not context.args:
@@ -705,7 +1183,7 @@ async def addusername_command(update, context):
 async def done_command(update, context):
     global usernames
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     usernames = load_usernames()
@@ -730,7 +1208,7 @@ async def done_command(update, context):
 async def setdelay_command(update, context):
     global delay_seconds
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not context.args:
@@ -768,7 +1246,7 @@ async def setdelay_command(update, context):
 async def forcestart_command(update, context):
     global rotation_task
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not target_data.get("target_id"):
@@ -822,7 +1300,7 @@ async def forcestart_command(update, context):
 async def forcestop_command(update, context):
     global rotation_task
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if rotation_task and not rotation_task.done():
@@ -854,7 +1332,7 @@ async def forcestop_command(update, context):
 async def change_now_command(update, context):
     global current_index
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not target_data.get("target_id"):
@@ -912,7 +1390,7 @@ async def change_now_command(update, context):
 # ============================================================
 
 async def status_command(update, context):
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     tg = await ensure_client()
@@ -957,7 +1435,7 @@ async def status_command(update, context):
 # ============================================================
 
 async def list_command(update, context):
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     if not usernames:
@@ -995,7 +1473,7 @@ async def list_command(update, context):
 async def clear_command(update, context):
     global usernames, current_index
 
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     usernames = []
@@ -1018,7 +1496,7 @@ async def clear_command(update, context):
 # ============================================================
 
 async def current_command(update, context):
-    if not await owner_only(update):
+    if not await authorized_only(update):
         return
 
     current_username = "Unknown"
@@ -1072,14 +1550,21 @@ def main():
     print("""
 ╔═══════════════════════════════════════╗
 ║     Telegram Link Changer Bot         ║
-║          Version 2.0                  ║
+║          Version 3.0                  ║
+║     With Approval System              ║
 ╚═══════════════════════════════════════╝
     """)
 
     application = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Command handlers
+    # Approval commands (Owner only)
+    application.add_handler(CommandHandler("approve", approve_command))
+    application.add_handler(CommandHandler("revoke", revoke_command))
+    application.add_handler(CommandHandler("approved", approved_list_command))
+    
+    # Main commands
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("mystatus", mystatus_command))
     application.add_handler(CommandHandler("connect", connect_command))
     application.add_handler(CommandHandler("addchannel", addchannel_command))
     application.add_handler(CommandHandler("addgroup", addgroup_command))
